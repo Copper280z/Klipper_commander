@@ -1,19 +1,28 @@
 #include "KlipperCommander_fifo.h"
 
+
 #ifdef USE_TINYUSB
     KlipperCommander::KlipperCommander(Adafruit_USBD_CDC &Serial) : serial(Serial) {
         serial = Serial;
     }
 #else
-    KlipperCommander::KlipperCommander(arduino::HardwareSerial &Serial) : serial(Serial) {
-        serial = Serial;
+    KlipperCommander::KlipperCommander(SerialUSB &Serial) : serial(Serial) {
+        serial = Serial; 
     }
 #endif
 
 void KlipperCommander::recieve_serial() {
     Pointer curr_write =  incoming_fifo.getWritePointer();
 
-    uint8_t bytes_read = serial.read(curr_write.ptr, curr_write.len);
+    // uint8_t bytes_read = serial.read(curr_write.ptr, curr_write.len);
+
+    uint8_t bytes_read = 0;
+    while (serial.available() > 0) {
+        if (bytes_read >= (curr_write.len-1)) break;
+        curr_write.ptr[bytes_read] = serial.read();
+        bytes_read +=1;
+    }
+
     if (bytes_read == 0) return;
     print_byte_array(curr_write.ptr, bytes_read);
 
@@ -21,7 +30,7 @@ void KlipperCommander::recieve_serial() {
     uint8_t msg_bytes_already_recvd = incoming_fifo.getCurrentWriteMsgLength();
 
     uint8_t bytes_available = msg_bytes_already_recvd + bytes_read;
-    // Serial.printf("Now have %u bytes available to do stuff with\n", bytes_available);
+    // DEBUG_PRINTF("Now have %u bytes available to do stuff with\n", bytes_available);
     
     if ((bytes_available)  < msg_length){
         incoming_fifo.advanceWriteCursorN(bytes_read);
@@ -35,13 +44,13 @@ void KlipperCommander::recieve_serial() {
         uint8_t* msg_ptr = incoming_fifo.getCurrentWriteMsgStart();
         uint16_t msg_crc = parse_crc(msg_ptr, msg_length);
         uint16_t calc_crc = crc16(msg_ptr, msg_length-3);
-        Serial.printf("msg length: 0x%x\n", msg_length);
-        Serial.printf("msg sync:    0x%x\n", msg_sync);
-        Serial.printf("calc'd crc: 0x%x\n", calc_crc);
-        Serial.printf("msg crc:    0x%x\n", msg_crc);
+        DEBUG_PRINTF("msg length: 0x%x\n", msg_length);
+        DEBUG_PRINTF("msg sync:    0x%x\n", msg_sync);
+        DEBUG_PRINTF("calc'd crc: 0x%x\n", calc_crc);
+        DEBUG_PRINTF("msg crc:    0x%x\n", msg_crc);
         
         if (msg_sync == SYNC_BYTE && msg_crc == calc_crc && msg_length <= 64 && msg_length > 0) {
-            Serial.println("Valid Message!");
+            DEBUG_PRINTLN("Valid Message!");
             uint8_t sequence = incoming_fifo.currentWriteMsgGetByteAt(1);
             ACK(sequence);
             incoming_fifo.advanceWriteCursorN(msg_length);
@@ -49,23 +58,25 @@ void KlipperCommander::recieve_serial() {
             bytes_available -= msg_length;
             msg_length = incoming_fifo.currentWriteMsgGetByteAt(0);
         } else {
-            Serial.println("Invalid Message!");
+            DEBUG_PRINTLN("Invalid Message!");
             print_byte_array(msg_ptr, bytes_available);
             // out of sync - look for a SYNC_BYTE and copy 
             // everything after that back to the start of current msg, then start over
             bool sync=false;
             for (int i=0;i<bytes_available;i++) {
                 uint8_t curr_byte = incoming_fifo.currentWriteMsgGetByteAt(i);
-                Serial.printf("0x%x\n", curr_byte);
+                DEBUG_PRINTF("0x%x\n", curr_byte);
                 if (curr_byte == SYNC_BYTE) {
                     memcpy(msg_ptr, msg_ptr+i+1, bytes_available-i+1);
                     bytes_available -= i;
                     sync=true;
+                    msg_length = incoming_fifo.currentWriteMsgGetByteAt(0);
                     break;
                 }
             }
             if (sync==false) {
                 bytes_available = 0;
+                incoming_fifo.setWriteCursorToStart();
             }
         }
     }
@@ -77,29 +88,29 @@ void KlipperCommander::parse_message() {
     uint8_t commands_to_parse = incoming_fifo.getNumMsgToRead();
 
     while (commands_to_parse > 0) {
-        Serial.printf("\n%d commands in queue\n", commands_to_parse);
+        DEBUG_PRINTF("\n%d commands in queue\n", commands_to_parse);
         Pointer read_ptr = incoming_fifo.getReadPointer();
 
-        Serial.printf("Length of command being parsed: %d\n", read_ptr.len);
+        DEBUG_PRINTF("Length of command being parsed: %d\n", read_ptr.len);
 
         for (int i=0; i<read_ptr.len;i++){
-            Serial.print(*(read_ptr.ptr+i), HEX);
-            Serial.print(" ");
+            DEBUG_PRINT(*(read_ptr.ptr+i), HEX);
+            DEBUG_PRINT(" ");
         }
-        Serial.print("\n");
+        DEBUG_PRINT("\n");
 
         uint8_t sequence = *(read_ptr.ptr+1);
-        Serial.printf("sequence low bytes: %u\n", sequence & 0b00001111 );
+        DEBUG_PRINTF("sequence low bytes: %u\n", sequence & 0b00001111 );
 
         int16_t command_bytes_available = read_ptr.len-MIN_MESSAGE_LEN;
         int32_t bytes_consumed=0;
         while (command_bytes_available>0) {
-            Serial.printf("Command bytes available: %u\n", command_bytes_available);
+            DEBUG_PRINTF("Command bytes available: %u\n", command_bytes_available);
             VarInt cmd_id_var = parse_vlq_int(read_ptr.ptr+2+bytes_consumed, command_bytes_available);
-            Serial.printf("Command ID:  %u\n", (int32_t) cmd_id_var.value);
+            DEBUG_PRINTF("Command ID:  %u\n", (int32_t) cmd_id_var.value);
             bytes_consumed = command_dispatcher(cmd_id_var.value, sequence, read_ptr.ptr+2+bytes_consumed, command_bytes_available);
             if (bytes_consumed < 0) {
-                Serial.printf("bytes_consumed is < 0: %u\n", bytes_consumed);
+                DEBUG_PRINTF("bytes_consumed is < 0: %u\n", bytes_consumed);
                 // not sure what that command was, so maybe we might be lost
                 // quit and try again next time
                 // if this leg is ever taken, something is wrong, probably related to the data dict
@@ -118,8 +129,8 @@ int32_t KlipperCommander::command_dispatcher(uint32_t cmd_id, uint8_t sequence, 
         case 1:{
             VarInt offset_var = parse_vlq_int((msg+1), length-1);
             VarInt amount_var = parse_vlq_int((msg+1+offset_var.length), length-1-offset_var.length);
-            Serial.printf("Offset: %u - len: %u\n", (int32_t) offset_var.value, offset_var.length);
-            Serial.printf("Amount: %u - len: %u\n", amount_var.value, amount_var.length);
+            DEBUG_PRINTF("Offset: %u - len: %u\n", (int32_t) offset_var.value, offset_var.length);
+            DEBUG_PRINTF("Amount: %u - len: %u\n", amount_var.value, amount_var.length);
             send_config(sequence, offset_var.value, amount_var.value);
             bytes_consumed = 1+offset_var.length+amount_var.length;
             break;
@@ -135,11 +146,11 @@ int32_t KlipperCommander::command_dispatcher(uint32_t cmd_id, uint8_t sequence, 
 void KlipperCommander::send_serial(){
     uint8_t msgs_to_send = outgoing_fifo.getNumMsgToRead();
     if (msgs_to_send > 0) {
-        Serial.printf("\nStarting serial send to host: %u messages\n", msgs_to_send);
+        DEBUG_PRINTF("\nStarting serial send to host: %u messages\n", msgs_to_send);
     }
     for (int i=0; i<msgs_to_send; i++){
         Pointer read_ptr = outgoing_fifo.getReadPointer();
-        Serial.printf("msg sent: ");
+        DEBUG_PRINTF("msg sent: ");
         print_byte_array(read_ptr.ptr, read_ptr.len);
         serial.write(read_ptr.ptr, read_ptr.len);
         outgoing_fifo.advanceReadCursor();
@@ -150,8 +161,8 @@ void KlipperCommander::send_serial(){
 void KlipperCommander::ACK(uint8_t sequence) {
     Pointer write_ptr = outgoing_fifo.getWritePointer();
     uint8_t new_sequence = ((sequence +1 ) & 0b00001111) | 0x10;
-    // Serial.printf("ACK sequence high bytes: 0x%x\n", new_sequence & 0b11110000 );
-    // Serial.printf("ACK sequence low bytes: %u\n", new_sequence & 0b00001111 );
+    // DEBUG_PRINTF("ACK sequence high bytes: 0x%x\n", new_sequence & 0b11110000 );
+    // DEBUG_PRINTF("ACK sequence low bytes: %u\n", new_sequence & 0b00001111 );
 
     write_ptr.ptr[0] = 5;
     write_ptr.ptr[1] = new_sequence;
@@ -273,9 +284,9 @@ void KlipperCommander::enqueue_config_response(uint8_t sequence, uint32_t offset
     write_ptr.ptr[4+vlq_bytes+count] = (uint8_t) (crc & 0xFF);
     write_ptr.ptr[5+vlq_bytes+count] = SYNC_BYTE;
 
-    Serial.printf("command length: %u - 0x%x\n", send_cmd_len,send_cmd_len);
-    Serial.printf("Parsed crc: 0x%x\n", parse_crc(write_ptr.ptr,send_cmd_len));
-    Serial.printf("Calc'd crc: 0x%x\n", crc);
+    DEBUG_PRINTF("command length: %u - 0x%x\n", send_cmd_len,send_cmd_len);
+    DEBUG_PRINTF("Parsed crc: 0x%x\n", parse_crc(write_ptr.ptr,send_cmd_len));
+    DEBUG_PRINTF("Calc'd crc: 0x%x\n", crc);
 
     outgoing_fifo.advanceWriteCursorN(send_cmd_len);
     outgoing_fifo.finalizeMessage();
@@ -283,10 +294,10 @@ void KlipperCommander::enqueue_config_response(uint8_t sequence, uint32_t offset
 
 void print_byte_array(uint8_t* arr, uint8_t len){
     for (int i=0; i<len;i++){
-        Serial.print(*(arr+i), HEX);
-        Serial.print(" ");
+        DEBUG_PRINT(*(arr+i), HEX);
+        DEBUG_PRINT(" ");
     }
-    Serial.print("\n");
+    DEBUG_PRINT("\n");
 }
 
 // copy+paste from klipper, rewrite without goto

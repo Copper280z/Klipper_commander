@@ -37,7 +37,11 @@ class FIFO {
          * This is useful for the case where you finish recieving a message and also recieve a portion of another.
         *****************/
         void advanceWriteCursorN(uint8_t n_bytes);
-
+        
+         /**************** 
+          * Sets the write cursor back to the start of the current write       
+        *****************/
+        void setWriteCursorToStart();
         /**************** 
          * Maybe don't use?
          * Adds n_bytes to the internal counter for the current message being written
@@ -84,6 +88,8 @@ class FIFO {
         uint8_t* array_end;
         uint8_t* array_start;
         uint32_t available_length;
+
+        uint8_t illegal_read_pointer_overtake=0;
 
     private:
 

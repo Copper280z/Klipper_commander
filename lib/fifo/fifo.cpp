@@ -35,6 +35,11 @@ void FIFO::advanceWriteCursorN(uint8_t n_bytes) {
     *write_message_length_p += n_bytes;
 }
 
+void FIFO::setWriteCursorToStart() {
+    write_cursor = start_current_write;
+
+}
+
 uint8_t FIFO::finalizeMessage() {
     available_length = &array[FIFO_LENGTH-1]-write_cursor;
 
@@ -63,13 +68,20 @@ Pointer FIFO::getReadPointer() {
 }
 
 void FIFO::advanceReadCursor() {
-    uint32_t available_length = &array[FIFO_LENGTH-1]-(read_cursor+read_message_length_p[1]);
+    uint32_t available_length = &array[FIFO_LENGTH-1]-(read_cursor+read_message_length_p[0]+read_message_length_p[1]);
     
     if (available_length < (uint32_t) MAX_MESSAGE_LEN) {
         // Serial.println("Reset read cursor to beginning of array");
         read_cursor = &array[0];
     } else {
-        read_cursor+= *read_message_length_p;
+        uint8_t* new_read_cursor = read_cursor+ *read_message_length_p;
+        if (new_read_cursor > write_cursor) {
+            illegal_read_pointer_overtake = 1;
+            read_cursor = write_cursor;
+        } else {
+            read_cursor = new_read_cursor;
+        }
+        
     }
     advance_msg_len_read_ptr();
 }

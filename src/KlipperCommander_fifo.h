@@ -9,6 +9,11 @@
 #include <Adafruit_TinyUSB.h>
 #endif
 
+#define DEBUG 0
+#define DEBUG_PRINTF if (DEBUG) Serial.printf
+#define DEBUG_PRINT if (DEBUG) Serial.print
+#define DEBUG_PRINTLN if (DEBUG) Serial.print
+
 #define COMMAND_QUEUE_LEN 64
 #define SEND_QUEUE_LEN 64
 #define MAX_MESSAGE_LEN 64
@@ -31,7 +36,7 @@ class KlipperCommander {
 		#ifdef USE_TINYUSB
 			KlipperCommander(Adafruit_USBD_CDC &Serial);
 		#else
-			KlipperCommander(HardwareSerial &Serial);
+			KlipperCommander(SerialUSB &Serial);
 		#endif
 
 
@@ -48,7 +53,7 @@ class KlipperCommander {
 		#ifdef USE_TINYUSB
 			Adafruit_USBD_CDC &serial;
 		#else
-			HardwareSerial &serial;
+			SerialUSB &serial;
 		#endif
 
 		FIFO incoming_fifo;
