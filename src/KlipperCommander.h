@@ -89,7 +89,7 @@ class KlipperCommander {
 		// uint8_t out_buf_send_idx = 0;
 
 		CONFIG_DICT
-
+		uint32_t host_config_crc;
 		//command handlers below
 		void send_config(uint8_t sequence, uint32_t offset, uint32_t amount) ;
 

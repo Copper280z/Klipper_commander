@@ -1,4 +1,4 @@
-#include "KlipperCommander_fifo.h"
+#include "KlipperCommander.h"
 
 
 #ifdef USE_TINYUSB
@@ -13,10 +13,18 @@
     }
 #endif
 
+void KlipperCommander::handle() {
+    recieve_serial();
+    parse_message();
+    send_serial();
+
+    uint32_t current_time = micros();
+    update_stats(current_time);
+}
+
 void KlipperCommander::recieve_serial() {
     Pointer curr_write =  incoming_fifo.getWritePointer();
 
-    // uint8_t bytes_read = serial.read(curr_write.ptr, curr_write.len);
 
     uint8_t bytes_read = 0;
     while (serial.available() > 0) {
@@ -140,20 +148,26 @@ int32_t KlipperCommander::command_dispatcher(uint32_t cmd_id, uint8_t sequence, 
         case 4:{ //Uptime
             current_time = micros();
 
-            uint8_t msg[64];
+            uint8_t new_msg[64];
             uint8_t resp_id = 79;
-            uint8_t offset = encode_vlq_int(msg, resp_id);
-            offset+= encode_vlq_int(msg+offset, current_time>>32);
-            offset+= encode_vlq_int(msg+offset, current_time);
-            enqueue_response(sequence, msg, offset);
+            uint8_t offset = encode_vlq_int(new_msg, resp_id);
+            offset+= encode_vlq_int(new_msg+offset, prev_stats_send_high + (current_time < prev_stats_send));
+            offset+= encode_vlq_int(new_msg+offset, current_time);
+            enqueue_response(sequence, new_msg, offset);
         }
         case 5: { //get_clock
             current_time = micros();
-            uint8_t msg[64];
+            uint8_t new_msg[64];
             uint8_t resp_id = 80;
-            uint8_t offset = encode_vlq_int(msg, resp_id);
-            offset+= encode_vlq_int(msg+offset, current_time);
-            enqueue_response(sequence, msg, offset);     
+            uint8_t offset = encode_vlq_int(new_msg, resp_id);
+            offset+= encode_vlq_int(new_msg+offset, current_time);
+            enqueue_response(sequence, new_msg, offset);     
+        }
+        case 6: { // finalize config
+            VarInt config_crc_var = parse_vlq_int((msg+1), length-1);
+            host_config_crc = config_crc_var.value;
+            // needs response with size of move queue
+            // need to decide how to implement move queue
         }
         default:{
             bytes_consumed = -1;
@@ -366,6 +380,7 @@ void KlipperCommander::update_stats(uint32_t current_time) {
         return;
     }
 
+    // not sure how this is ever reached, maybe when the clock rolls over?
     if (current_time < prev_stats_send){
         prev_stats_send_high++;
     }
