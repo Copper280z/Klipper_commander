@@ -19,6 +19,7 @@
 #define MAX_MESSAGE_LEN 64
 #define MIN_MESSAGE_LEN 5
 #define MESSAGE_DATA_LEN (MAX_MESSAGE_LEN-MIN_MESSAGE_LEN)
+#define SUMSQ_BASE 256
 
 #define SYNC_BYTE 0x7e
 
@@ -46,6 +47,7 @@ class KlipperCommander {
 
 		void recieve_serial();
 		void parse_message();
+		void update_stats(uint32_t current_time);
 
 		void send_serial();
 
@@ -58,6 +60,7 @@ class KlipperCommander {
 
 		FIFO incoming_fifo;
 		FIFO outgoing_fifo;
+		uint8_t latest_outgoing_sequence;
 
 		void enqueue_response(uint8_t sequence, uint8_t* msg, uint8_t length);
 		void enqueue_config_response(uint8_t sequence, uint32_t offset, uint8_t* msg, uint8_t length);
@@ -73,6 +76,13 @@ class KlipperCommander {
 
 		uint16_t parse_crc(uint8_t* msg, uint8_t length);
 
+		uint32_t current_time;
+		uint32_t loop_start_time;
+		uint32_t prev_stats_send;
+		uint32_t prev_stats_send_high;
+		uint32_t stats_loop_count;
+		uint32_t stats_sum;
+		uint32_t stats_sumsq;
 
 		// uint8_t output_buffer[SEND_QUEUE_LEN][64];
 		// uint8_t out_buf_write_idx = 0;

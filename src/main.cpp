@@ -57,6 +57,9 @@ void loop() {
     k_commander.parse_message();
     k_commander.send_serial();
     
+    uint32_t current_time = micros();
+    k_commander.update_stats(current_time);
+    
     // dur = micros()-t0;
     // if (dur > 1e6) {
     //     Serial.printf("Loops per sec: %u\n", i);

@@ -8,6 +8,8 @@
 #else
     KlipperCommander::KlipperCommander(Stream &Serial) : serial(Serial) {
         serial = Serial; 
+        loop_start_time = micros();
+
     }
 #endif
 
@@ -135,6 +137,24 @@ int32_t KlipperCommander::command_dispatcher(uint32_t cmd_id, uint8_t sequence, 
             bytes_consumed = 1+offset_var.length+amount_var.length;
             break;
         }
+        case 4:{ //Uptime
+            current_time = micros();
+
+            uint8_t msg[64];
+            uint8_t resp_id = 79;
+            uint8_t offset = encode_vlq_int(msg, resp_id);
+            offset+= encode_vlq_int(msg+offset, current_time>>32);
+            offset+= encode_vlq_int(msg+offset, current_time);
+            enqueue_response(sequence, msg, offset);
+        }
+        case 5: { //get_clock
+            current_time = micros();
+            uint8_t msg[64];
+            uint8_t resp_id = 80;
+            uint8_t offset = encode_vlq_int(msg, resp_id);
+            offset+= encode_vlq_int(msg+offset, current_time);
+            enqueue_response(sequence, msg, offset);     
+        }
         default:{
             bytes_consumed = -1;
             break;
@@ -248,6 +268,7 @@ void KlipperCommander::enqueue_response(uint8_t sequence, uint8_t* msg, uint8_t 
     uint8_t send_cmd_len = 5+length;
 
     uint8_t new_sequence = ((sequence + 1 ) & 0b00001111) | 0x10;
+    latest_outgoing_sequence = new_sequence;
 
     write_ptr.ptr[0] = send_cmd_len;
     write_ptr.ptr[1] = new_sequence;
@@ -319,4 +340,46 @@ f3: *p++ = ((v>>7) & 0x7f) | 0x80;
 f4: *p++ = v & 0x7f;
     bytes+=1;
     return bytes;
+}
+
+void KlipperCommander::update_stats(uint32_t current_time) {
+    uint32_t looptime = current_time - loop_start_time;
+    stats_loop_count++;
+
+    stats_sum += looptime;
+    uint32_t next_sumsq;
+    if (looptime <= 0xffff) {
+        next_sumsq = stats_sumsq + (looptime * looptime+SUMSQ_BASE-1)/SUMSQ_BASE;
+    } else if (looptime <= 0xfffff) {
+        next_sumsq = stats_sumsq + looptime * (looptime+SUMSQ_BASE-1)/SUMSQ_BASE;
+    } else {
+        next_sumsq = 0xffffffff;
+    }
+    if (next_sumsq < stats_sumsq)
+        next_sumsq = 0xffffffff;
+    stats_sumsq = next_sumsq;
+
+    loop_start_time = current_time;
+    // send stats update every 5sec
+    // if not time yet, return now
+    if (current_time < prev_stats_send+5000000) {
+        return;
+    }
+
+    if (current_time < prev_stats_send){
+        prev_stats_send_high++;
+    }
+
+    uint8_t msg[64];
+    uint8_t resp_id = 78;
+    uint8_t offset = encode_vlq_int(msg, resp_id);
+    offset+= encode_vlq_int(msg+offset, stats_loop_count);
+    offset+= encode_vlq_int(msg+offset, stats_sum);
+    offset+= encode_vlq_int(msg+offset, stats_sumsq);
+    enqueue_response(latest_outgoing_sequence-1, msg, offset);
+
+    prev_stats_send = current_time;
+    stats_loop_count = 0;
+    stats_sum = 0;
+    stats_sumsq = 0;
 }
