@@ -6,7 +6,7 @@
         serial = Serial;
     }
 #else
-    KlipperCommander::KlipperCommander(SerialUSB &Serial) : serial(Serial) {
+    KlipperCommander::KlipperCommander(Stream &Serial) : serial(Serial) {
         serial = Serial; 
     }
 #endif

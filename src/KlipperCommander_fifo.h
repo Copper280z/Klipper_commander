@@ -36,7 +36,7 @@ class KlipperCommander {
 		#ifdef USE_TINYUSB
 			KlipperCommander(Adafruit_USBD_CDC &Serial);
 		#else
-			KlipperCommander(SerialUSB &Serial);
+			KlipperCommander(Stream &Serial);
 		#endif
 
 
@@ -53,7 +53,7 @@ class KlipperCommander {
 		#ifdef USE_TINYUSB
 			Adafruit_USBD_CDC &serial;
 		#else
-			SerialUSB &serial;
+			Stream &serial;
 		#endif
 
 		FIFO incoming_fifo;
