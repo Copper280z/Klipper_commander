@@ -95,6 +95,49 @@ class KlipperCommander {
 
 };
 
+struct MoveData {
+    uint32_t interval;
+    uint32_t count;
+    int32_t add;
+    int8_t dir;
+};
+
+class MotionQueue {
+    public:
+        MotionQueue();
+        MotionQueue(float *position);
+        MotionQueue(float *position, float *velocity);
+        MotionQueue(float *position, float *velocity, float *acceleration);
+
+        // function call in main loop updates attached variables
+        void update();
+        
+        int8_t push(MoveData newMove);
+        uint8_t getCapacity();
+        uint8_t getSize();
+
+        float *position_var;
+        float *velocity_var;
+        float *acceleration_var;
+        
+        
+        uint32_t (*clock)(void);
+        uint32_t previous_time;
+
+        MoveData current_move;
+        float position_coeff;
+        float velocity_coeff;
+        float acceleration_coeff;
+
+    private:
+
+        MoveData pop();
+        MoveData *head;
+        MoveData *tail;
+
+        MoveData move_array[128];
+};
+
 void print_byte_array(uint8_t* arr, uint8_t len);
 
 

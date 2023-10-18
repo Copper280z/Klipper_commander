@@ -398,3 +398,67 @@ void KlipperCommander::update_stats(uint32_t current_time) {
     stats_sum = 0;
     stats_sumsq = 0;
 }
+
+
+
+void MotionQueue::update() {
+    uint32_t current_time = clock();
+    uint32_t elapsed_time = current_time - previous_time;
+
+    if (elapsed_time > current_move.interval) {
+        float delta_counts = (float) elapsed_time / (float) current_move.interval; 
+        if (delta_counts > 2) {
+            DEBUG_PRINTF("Warning, loop rate slower than step rate: %.2f\n", delta_counts);
+        }
+        
+        // make sure we don't move beyond the commanded move
+        if (floor(delta_counts) > current_move.count) {
+            delta_counts = float(current_move.count);
+        }
+
+        // add counts to position variable
+        *position_var += position_coeff * floor(delta_counts) * (float) current_move.dir;
+
+        // subtract added counts from current_move
+        current_move.count -= floor(delta_counts);
+        
+        // increment current_move.interval by add*delta_counts
+        current_move.interval += floor(delta_counts)*current_move.add;
+        
+        // update attached velocity FF var
+        if (velocity_var != NULL) {
+            *velocity_var += velocity_coeff * current_move.interval;
+        }
+        
+        // update attached acceleration var
+        if (acceleration_var != NULL) {
+            *acceleration_var += acceleration_coeff * current_move.add;
+        }
+    }
+
+    if (current_move.count == 0) {
+       current_move = pop(); 
+    }
+
+}
+
+int8_t MotionQueue::push(MoveData newMove) {
+    
+    return 0;
+}
+
+uint8_t MotionQueue::getCapacity() {
+
+    return 0;
+}
+
+uint8_t MotionQueue::getSize() {
+
+    return 0;
+}
+
+MoveData MotionQueue::pop() {
+
+    return MoveData{9999999,0,0,0};
+}
+
