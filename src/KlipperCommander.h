@@ -4,6 +4,7 @@
 #include "Arduino.h"
 #include "compressed_dict.h"
 #include "fifo.h"
+#include <stdint.h>
 
 #ifdef USE_TINYUSB
 #include <Adafruit_TinyUSB.h>
@@ -20,8 +21,9 @@
 #define MIN_MESSAGE_LEN 5
 #define MESSAGE_DATA_LEN (MAX_MESSAGE_LEN-MIN_MESSAGE_LEN)
 #define SUMSQ_BASE 256
-
 #define SYNC_BYTE 0x7e
+
+#define MOVE_QUEUE_LEN 128
 
 struct VarInt {
 	uint32_t value;
@@ -38,6 +40,7 @@ class KlipperCommander {
 			KlipperCommander(Adafruit_USBD_CDC &Serial);
 		#else
 			KlipperCommander(Stream &Serial);
+			KlipperCommander(Stream &Serial, void* clock);
 		#endif
 
 
@@ -50,6 +53,9 @@ class KlipperCommander {
 		void update_stats(uint32_t current_time);
 
 		void send_serial();
+
+        uint32_t (*clock)(void);
+        MotionQueue move_queue;
 
 	private:
 		#ifdef USE_TINYUSB
@@ -108,11 +114,15 @@ class MotionQueue {
         MotionQueue(float *position);
         MotionQueue(float *position, float *velocity);
         MotionQueue(float *position, float *velocity, float *acceleration);
+        MotionQueue(uint32_t (*clock)(void));
+        MotionQueue(uint32_t (*clock)(void), float *position);
+        MotionQueue(uint32_t (*clock)(void), float *position, float *velocity);
+        MotionQueue(uint32_t (*clock)(void), float *position, float *velocity, float *acceleration);
 
         // function call in main loop updates attached variables
         void update();
         
-        int8_t push(MoveData newMove);
+        int8_t push(MoveData new_move);
         uint8_t getCapacity();
         uint8_t getSize();
 
@@ -134,8 +144,9 @@ class MotionQueue {
         MoveData pop();
         MoveData *head;
         MoveData *tail;
-
-        MoveData move_array[128];
+        uint8_t queue_size;
+        uint8_t queue_capacity;
+        MoveData move_array[MOVE_QUEUE_LEN];
 };
 
 void print_byte_array(uint8_t* arr, uint8_t len);

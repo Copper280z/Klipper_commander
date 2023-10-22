@@ -9,6 +9,7 @@
     KlipperCommander::KlipperCommander(Stream &Serial) : serial(Serial) {
         serial = Serial; 
         loop_start_time = micros();
+        move_queue = MotionQueue();
 
     }
 #endif
@@ -399,7 +400,47 @@ void KlipperCommander::update_stats(uint32_t current_time) {
     stats_sumsq = 0;
 }
 
+MotionQueue::MotionQueue() {
+    clock = micros;
+    head = &move_array[0];
+    tail = &move_array[0];
+}
 
+MotionQueue::MotionQueue(float *position) {
+    clock = micros;
+    position_var = position;
+    head = &move_array[0];
+    tail = &move_array[0];
+}
+
+MotionQueue::MotionQueue(float *position, float *velocity) {
+    clock = micros;
+    position_var = position;
+    velocity_var = velocity;
+    head = &move_array[0];
+    tail = &move_array[0];
+}
+
+MotionQueue::MotionQueue(uint32_t (*user_clock)(void)){
+    clock = user_clock;
+    head = &move_array[0];
+    tail = &move_array[0];
+}
+
+MotionQueue::MotionQueue(uint32_t (*user_clock)(void), float *position){
+    clock = user_clock;
+    position_var = position;
+    head = &move_array[0];
+    tail = &move_array[0];
+}
+
+MotionQueue::MotionQueue(uint32_t (*user_clock)(void), float *position, float *velocity){
+    clock = user_clock;
+    position_var = position;
+    velocity_var = velocity;
+    head = &move_array[0];
+    tail = &move_array[0];
+}
 
 void MotionQueue::update() {
     uint32_t current_time = clock();
@@ -408,7 +449,7 @@ void MotionQueue::update() {
     if (elapsed_time > current_move.interval) {
         float delta_counts = (float) elapsed_time / (float) current_move.interval; 
         if (delta_counts > 2) {
-            DEBUG_PRINTF("Warning, loop rate slower than step rate: %.2f\n", delta_counts);
+            DEBUG_PRINTF("Possibly Meaningful Warning, loop rate slower than step rate: %.2f\n", delta_counts);
         }
         
         // make sure we don't move beyond the commanded move
@@ -442,23 +483,46 @@ void MotionQueue::update() {
 
 }
 
-int8_t MotionQueue::push(MoveData newMove) {
-    
-    return 0;
+int8_t MotionQueue::push(MoveData new_move) {
+    if (queue_size<MOVE_QUEUE_LEN) {
+        *head = new_move;
+        if (head == move_array[MOVE_QUEUE_LEN-1]) {
+            head = move_array[0];
+        } else {
+            head+=1;
+        }
+        queue_size+=1
+        return 0;
+    } else {
+        return -1;
+    }
 }
 
 uint8_t MotionQueue::getCapacity() {
 
-    return 0;
+    return queue_capacity;
 }
 
 uint8_t MotionQueue::getSize() {
 
-    return 0;
+    return queue_size;
 }
 
 MoveData MotionQueue::pop() {
+    if (queue_size > 0) {
+        queue_size-=1;
+        
+        MoveData next_move = *tail;
 
-    return MoveData{9999999,0,0,0};
+        if (tail == move_array[MOVE_QUEUE_LEN-1]) {
+            tail = move_array[0];
+        }else {
+            tail+=1;
+        }
+
+    } else {
+        // Move of large interval with no counts, should mean do nothing and wait.
+        return MoveData{9999999,0,0,0};
+    }
 }
 
