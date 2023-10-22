@@ -5,6 +5,7 @@
 #include "compressed_dict.h"
 #include "fifo.h"
 #include <stdint.h>
+#include "MotionQueue.h"
 
 #ifdef USE_TINYUSB
 #include <Adafruit_TinyUSB.h>
@@ -23,7 +24,6 @@
 #define SUMSQ_BASE 256
 #define SYNC_BYTE 0x7e
 
-#define MOVE_QUEUE_LEN 128
 
 struct VarInt {
 	uint32_t value;
@@ -101,53 +101,6 @@ class KlipperCommander {
 
 };
 
-struct MoveData {
-    uint32_t interval;
-    uint32_t count;
-    int32_t add;
-    int8_t dir;
-};
-
-class MotionQueue {
-    public:
-        MotionQueue();
-        MotionQueue(float *position);
-        MotionQueue(float *position, float *velocity);
-        MotionQueue(float *position, float *velocity, float *acceleration);
-        MotionQueue(uint32_t (*clock)(void));
-        MotionQueue(uint32_t (*clock)(void), float *position);
-        MotionQueue(uint32_t (*clock)(void), float *position, float *velocity);
-        MotionQueue(uint32_t (*clock)(void), float *position, float *velocity, float *acceleration);
-
-        // function call in main loop updates attached variables
-        void update();
-        
-        int8_t push(MoveData new_move);
-        uint8_t getCapacity();
-        uint8_t getSize();
-
-        float *position_var;
-        float *velocity_var;
-        float *acceleration_var;
-        
-        
-        uint32_t (*clock)(void);
-        uint32_t previous_time;
-
-        MoveData current_move;
-        float position_coeff;
-        float velocity_coeff;
-        float acceleration_coeff;
-
-    private:
-
-        MoveData pop();
-        MoveData *head;
-        MoveData *tail;
-        uint8_t queue_size;
-        uint8_t queue_capacity;
-        MoveData move_array[MOVE_QUEUE_LEN];
-};
 
 void print_byte_array(uint8_t* arr, uint8_t len);
 
