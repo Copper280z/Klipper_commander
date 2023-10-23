@@ -51,6 +51,10 @@ class MotionQueue {
         float position_coeff;
         float velocity_coeff;
         float acceleration_coeff;
+        int8_t host_dir = 1;
+
+        uint8_t endstop_state = 0;
+        uint8_t homing = 0;
 
     private:
 

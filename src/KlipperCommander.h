@@ -24,6 +24,10 @@
 #define SUMSQ_BASE 256
 #define SYNC_BYTE 0x7e
 
+struct ObjID {
+    bool allocated;
+    uint32_t oid;
+};
 
 struct VarInt {
 	uint32_t value;
@@ -57,6 +61,10 @@ class KlipperCommander {
         uint32_t (*clock)(void);
         MotionQueue move_queue;
 
+        ObjID stepper_obj;
+        ObjID trsync_obj;
+        ObjID endstop_obj;
+        
 	private:
 		#ifdef USE_TINYUSB
 			Adafruit_USBD_CDC &serial;

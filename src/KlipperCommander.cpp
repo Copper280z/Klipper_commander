@@ -187,7 +187,7 @@ int32_t KlipperCommander::command_dispatcher(uint32_t cmd_id, uint8_t sequence, 
 
         }
         case 8: { // allocate_oids count=%c
-        
+        // maybe this can be a nop, since I'd rather everything be static anyhow
         }
         case 9: { //debug_nop
         }
@@ -205,22 +205,58 @@ int32_t KlipperCommander::command_dispatcher(uint32_t cmd_id, uint8_t sequence, 
 
         }
         case 20: { // reset_step_clock oid=%c clock=%u
-
+            VarInt oid_var = parse_vlq_int((msg+1), length-1);
+            VarInt clock_var = parse_vlq_int((msg+1), length-1+oid_var.length);
+            move_queue.previous_time = clock_var.value;
+            
         }
         case 21: { // set_next_step_dir oid=%c dir=%c
+            VarInt oid_var = parse_vlq_int((msg+1), length-1);
+            VarInt dir_var = parse_vlq_int((msg+1), length-1+oid_var.length);
+            move_queue.host_dir = (int8_t) dir_var.value;
         
         }
         case 22: { // queue_step oid=%c interval=%u count=%hu add=%hi
-
+            uint8_t offset=0;
+            VarInt oid_var = parse_vlq_int((msg+1), length-1);
+            offset += oid_var.length;
+            VarInt interval_var = parse_vlq_int((msg+1), length-1+offset);
+            offset += interval_var.length;
+            VarInt count_var = parse_vlq_int((msg+1), length-1+offset);
+            offset += count_var.length;
+            VarInt add_var = parse_vlq_int((msg+1), length-1+offset);
+            
+            MoveData new_move = MoveData{interval_var.value, count_var.value, (int32_t) add_var.value, move_queue.host_dir}; 
+            move_queue.push(new_move);
         }
-        case 23: { // config_stepper oid=%c step_pin=%c dir_pin=%c invert_step=%c step_pulse_ticks=%u
+        case 23: { // config_stepper oid=%c step_pin=%c dir_pin=%c invert_step=%c step_pulse_ticks=%ku
             // can ignore everything except oid
+            VarInt oid_var = parse_vlq_int((msg+1), length-1);
+            stepper_obj = ObjID{true, oid_var.value};
+            
         }
         case 24: { // endstop_query_state oid=%c
+            uint32_t next_clock = micros();
+            uint8_t new_msg[64];
+            uint8_t resp_id = 85;
+
+            VarInt oid_var = parse_vlq_int((msg+1), length-1);
+            uint8_t endstop_state = move_queue.endstop_state;
+
+            uint8_t offset = encode_vlq_int(new_msg, resp_id);
+            offset += encode_vlq_int(new_msg+offset, oid_var.value);            // oid
+            offset += encode_vlq_int(new_msg+offset, move_queue.homing);        // homing
+            offset += encode_vlq_int(new_msg+offset, next_clock);               // next_clock --TODO: Check implementation
+            offset += encode_vlq_int(new_msg+offset, move_queue.endstop_state); // pin_state
+            enqueue_response(sequence, new_msg, offset);
+            
+            
         }
         case 25: { // endstop_home oid=%c clock=%u sample_ticks=%u sample_count=%c rest_ticks=%u pin_value=%c trsync_oid=%c trigger_reason=%c         
         }
         case 26: { // config_endstop oid=%c pin=%c pull_up=%c
+            VarInt oid_var = parse_vlq_int((msg+1), length-1);
+            endstop_obj = ObjID{true, oid_var.value};
         }
         case 27: { // trsync_trigger oid=%c reason=%c
         }
@@ -229,6 +265,8 @@ int32_t KlipperCommander::command_dispatcher(uint32_t cmd_id, uint8_t sequence, 
         case 29: { // trsync_start oid=%c report_clock=%u report_ticks=%u expire_reason=%c
         }
         case 30: { // config_trsync oid=%c
+            VarInt oid_var = parse_vlq_int((msg+1), length-1);
+            trsync_obj = ObjID{true, oid_var.value};
         }
         case 74: { // reset
         }

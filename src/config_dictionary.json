@@ -12,6 +12,7 @@
         "debug_ping data=%*s": 10,
         "debug_write order=%c addr=%u val=%u": 11,
         "debug_read order=%c addr=%u": 12,
+
         "set_digital_out pin=%u value=%c": 13,
         "update_digital_out oid=%c value=%c": 14,
         "queue_digital_out oid=%c clock=%u on_ticks=%u": 15,
@@ -23,9 +24,11 @@
         "set_next_step_dir oid=%c dir=%c": 21,
         "queue_step oid=%c interval=%u count=%hu add=%hi": 22,
         "config_stepper oid=%c step_pin=%c dir_pin=%c invert_step=%c step_pulse_ticks=%u": 23,
+
         "endstop_query_state oid=%c": 24,
         "endstop_home oid=%c clock=%u sample_ticks=%u sample_count=%c rest_ticks=%u pin_value=%c trsync_oid=%c trigger_reason=%c": 25,
         "config_endstop oid=%c pin=%c pull_up=%c": 26,
+
         "trsync_trigger oid=%c reason=%c": 27,
         "trsync_set_timeout oid=%c clock=%u": 28,
         "trsync_start oid=%c report_clock=%u report_ticks=%u expire_reason=%c": 29,
