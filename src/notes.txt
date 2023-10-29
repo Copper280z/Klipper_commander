@@ -1,0 +1,26 @@
+trsync - endstop - stepper behavior
+trsync obj is allocated
+trsync is configured and started with one cmd
+    report_clock
+    report_ticks
+    expire_reason
+
+endstop_home is called which sets the endstop up to trigger the trsync object
+    trigger conditions are how many ticks the stop pin must be high
+
+stepper is commanded to stop when the trsync triggers (for any reason?) this links the stepper and trsync
+
+?? the trsync object sends periodic responses to the host while active ??
+
+
+**process runs**
+
+when the endstop pin is triggered, it triggers the trsync object
+ which in turn stops the motor and clears the motion queue
+    -klipper uses callback functions for this.
+    -once triggered the trsync obj sends a response to the host
+    -once triggered the endstop sends a response to the host
+
+
+
+

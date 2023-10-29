@@ -20,8 +20,10 @@ void KlipperCommander::handle() {
     send_serial();
 
     uint32_t current_time = micros();
-    update_stats(current_time);
-    move_queue.update();
+    if (!!host_config_crc && false) {
+        update_stats(current_time);
+        move_queue.update();
+    }
 }
 
 void KlipperCommander::attach(float &position_p) {
@@ -89,9 +91,11 @@ void KlipperCommander::recieve_serial() {
             bool sync=false;
             for (int i=0;i<bytes_available;i++) {
                 uint8_t curr_byte = incoming_fifo.currentWriteMsgGetByteAt(i);
+                uint8_t next_byte = incoming_fifo.currentWriteMsgGetByteAt(i);
                 DEBUG_PRINTF("0x%x\n", curr_byte);
-                if (curr_byte == SYNC_BYTE) {
+                if (curr_byte == SYNC_BYTE && (i+1) < bytes_available && next_byte < MAX_MESSAGE_LEN) {
                     memcpy(msg_ptr, msg_ptr+i+1, bytes_available-i+1);
+                    //should I zero out the memory that's copied from and is now expected to be "unoccupied"??
                     bytes_available -= i;
                     sync=true;
                     msg_length = incoming_fifo.currentWriteMsgGetByteAt(0);
@@ -168,6 +172,7 @@ int32_t KlipperCommander::command_dispatcher(uint32_t cmd_id, uint8_t sequence, 
             offset+= encode_vlq_int(new_msg+offset, prev_stats_send_high + (current_time < prev_stats_send));
             offset+= encode_vlq_int(new_msg+offset, current_time);
             enqueue_response(sequence, new_msg, offset);
+            break;
         }
         case 5: { //get_clock
             current_time = micros();
@@ -176,45 +181,76 @@ int32_t KlipperCommander::command_dispatcher(uint32_t cmd_id, uint8_t sequence, 
             uint8_t offset = encode_vlq_int(new_msg, resp_id);
             offset+= encode_vlq_int(new_msg+offset, current_time);
             enqueue_response(sequence, new_msg, offset);     
+            break;
         }
         case 6: { // finalize config
+            // uint8_t new_msg[64];
+            // uint8_t resp_id = 81;
             VarInt config_crc_var = parse_vlq_int((msg+1), length-1);
             host_config_crc = config_crc_var.value;
             // needs response with size of move queue
             // need to decide how to implement move queue
+            // uint8_t offset = encode_vlq_int(new_msg, resp_id);
+            // offset += encode_vlq_int(new_msg+offset, !!move_queue.getCapacity());
+            // offset += encode_vlq_int(new_msg+offset, host_config_crc);
+            // offset += encode_vlq_int(new_msg+offset, 0); // is_shutdown
+            // offset += encode_vlq_int(new_msg+offset, move_queue.getCapacity());
+            // enqueue_response(sequence, new_msg, offset); 
+            break;    
         }
         case 7: { // get config - return config crc to host
-
+            uint8_t new_msg[64];
+            uint8_t resp_id = 81;
+            VarInt config_crc_var = parse_vlq_int((msg+1), length-1);
+            host_config_crc = config_crc_var.value;
+            // needs response with size of move queue
+            // need to decide how to implement move queue
+            uint8_t offset = encode_vlq_int(new_msg, resp_id);
+            offset += encode_vlq_int(new_msg+offset, !!move_queue.getCapacity());
+            offset += encode_vlq_int(new_msg+offset, host_config_crc);
+            offset += encode_vlq_int(new_msg+offset, 0); // is_shutdown
+            offset += encode_vlq_int(new_msg+offset, move_queue.getCapacity());
+            enqueue_response(sequence, new_msg, offset);    
+            break;
         }
         case 8: { // allocate_oids count=%c
         // maybe this can be a nop, since I'd rather everything be static anyhow
+        break;
         }
         case 9: { //debug_nop
+        break;
         }
         case 10: { // debug_ping data=%*s
+        break;
         }
         case 11: { // debug_write order=%c, addr=%u, val=%u
+        break;
         }
         case 12: { // debug_read order=%c, addr=%u
+        break;
         }
         // 13-17 digital out pins
         case 18: { // stepper_stop_on_trigger oid=%c, trsync_oid=%c
 
+        break;
         }
         case 19: { //stepper_get_position oid=%c
 
+        break;
         }
         case 20: { // reset_step_clock oid=%c clock=%u
             VarInt oid_var = parse_vlq_int((msg+1), length-1);
             VarInt clock_var = parse_vlq_int((msg+1), length-1+oid_var.length);
             move_queue.previous_time = clock_var.value;
             
+        break;
         }
         case 21: { // set_next_step_dir oid=%c dir=%c
             VarInt oid_var = parse_vlq_int((msg+1), length-1);
             VarInt dir_var = parse_vlq_int((msg+1), length-1+oid_var.length);
             move_queue.host_dir = (int8_t) dir_var.value;
         
+        break;
         }
         case 22: { // queue_step oid=%c interval=%u count=%hu add=%hi
             uint8_t offset=0;
@@ -228,13 +264,16 @@ int32_t KlipperCommander::command_dispatcher(uint32_t cmd_id, uint8_t sequence, 
             
             MoveData new_move = MoveData{interval_var.value, count_var.value, (int32_t) add_var.value, move_queue.host_dir}; 
             move_queue.push(new_move);
+        break;
         }
         case 23: { // config_stepper oid=%c step_pin=%c dir_pin=%c invert_step=%c step_pulse_ticks=%ku
             // can ignore everything except oid
             VarInt oid_var = parse_vlq_int((msg+1), length-1);
             stepper_obj = ObjID{true, oid_var.value};
             
+        break;
         }
+        // endstop state contains the precise time the pin satisfied the trigger conditions
         case 24: { // endstop_query_state oid=%c
             uint32_t next_clock = micros();
             uint8_t new_msg[64];
@@ -246,33 +285,97 @@ int32_t KlipperCommander::command_dispatcher(uint32_t cmd_id, uint8_t sequence, 
             uint8_t offset = encode_vlq_int(new_msg, resp_id);
             offset += encode_vlq_int(new_msg+offset, oid_var.value);            // oid
             offset += encode_vlq_int(new_msg+offset, move_queue.homing);        // homing
-            offset += encode_vlq_int(new_msg+offset, next_clock);               // next_clock --TODO: Check implementation
+            offset += encode_vlq_int(new_msg+offset, next_clock);               // next_clock - Precise time pin satisfies trigger condition
             offset += encode_vlq_int(new_msg+offset, move_queue.endstop_state); // pin_state
             enqueue_response(sequence, new_msg, offset);
             
             
+        break;
         }
         case 25: { // endstop_home oid=%c clock=%u sample_ticks=%u sample_count=%c rest_ticks=%u pin_value=%c trsync_oid=%c trigger_reason=%c         
+        break;
         }
         case 26: { // config_endstop oid=%c pin=%c pull_up=%c
             VarInt oid_var = parse_vlq_int((msg+1), length-1);
-            endstop_obj = ObjID{true, oid_var.value};
+        break;
         }
+        // trsync returns a message when it is either triggered or the time runs out.
+        // this returned message causes the host to proceed and get the endstop state
+        // REASON_ENDSTOP_HIT = 1
+        // REASON_COMMS_TIMEOUT = 2
+        // REASON_HOST_REQUEST = 3
+        // REASON_PAST_END_TIME = 4
         case 27: { // trsync_trigger oid=%c reason=%c
+            uint8_t offset=0;
+            VarInt oid_var = parse_vlq_int((msg+1), length-1);
+            offset += oid_var.length;
+            VarInt reason_var = parse_vlq_int((msg+1), length-1+offset);
+            for (int i=0;i<MAX_TRSYNCS;i++) {
+                if (!trsync_objs[i].allocated) {
+                    continue;
+                }
+                if (trsync_objs[i].oid == oid_var.value) {
+                    trsync_objs[i].triggered = true;
+                    trsync_objs[i].expire_reason = reason_var.value;
+                    // TODO - if use callbacks, call them here?
+                }
+            }
+        break;
         }
         case 28: { // trsync_set_timeout oid=%c clock=%u
+            uint8_t offset=0;
+            VarInt oid_var = parse_vlq_int((msg+1), length-1);
+            offset += oid_var.length;
+            VarInt expire_clock_var = parse_vlq_int((msg+1), length-1+offset);
+            for (int i=0;i<MAX_TRSYNCS;i++) {
+                if (!trsync_objs[i].allocated) {
+                    continue;
+                }
+                if (trsync_objs[i].oid == oid_var.value) {
+                    trsync_objs[i].expire_time = expire_clock_var.value;
+                }
+            }
+        break;
         }
         case 29: { // trsync_start oid=%c report_clock=%u report_ticks=%u expire_reason=%c
+            uint8_t offset=0;
+            VarInt oid_var = parse_vlq_int((msg+1), length-1);
+            offset += oid_var.length;
+            VarInt report_clock_var = parse_vlq_int((msg+1), length-1+offset);
+            offset += report_clock_var.length;
+            VarInt report_ticks_var = parse_vlq_int((msg+1), length-1+offset);
+            offset += report_ticks_var.length;
+            VarInt expire_reason_var = parse_vlq_int((msg+1), length-1+offset);
+
+            for (int i=0;i<MAX_TRSYNCS;i++) {
+                if (!trsync_objs[i].allocated) {
+                    continue;
+                }
+                if (trsync_objs[i].oid == oid_var.value) {
+                    trsync_objs[i].report_time = report_clock_var.value;
+                    trsync_objs[i].expire_reason = expire_reason_var.value;
+                }
+            }
+        break;
         }
         case 30: { // config_trsync oid=%c
             VarInt oid_var = parse_vlq_int((msg+1), length-1);
-            trsync_obj = ObjID{true, oid_var.value};
+            for (int i=0;i<MAX_TRSYNCS;i++) {
+                if (!trsync_objs[i].allocated) {
+                    trsync_objs[i].allocated = true;
+                    trsync_objs[i].oid = oid_var.value;
+                    break;
+                }
+            }
+        break;
         }
         case 74: { // reset
+        break;
         }
         default:{
             bytes_consumed = -1;
             break;
+        break;
         }
     }
     return bytes_consumed;
@@ -336,28 +439,28 @@ uint16_t KlipperCommander::crc16(uint8_t* arr, uint8_t length) {
     return crc;
 }
 
-VarInt KlipperCommander::parse_vlq_int(uint8_t* bytes, uint8_t length) {
-    uint32_t c = *(bytes);
-    uint32_t v = 0; //c & 0x7F;
+// VarInt KlipperCommander::parse_vlq_int(uint8_t* bytes, uint8_t length) {
+//     uint32_t c = *(bytes);
+//     uint32_t v = 0;//c & 0x7F;
 
-    //if vlq is negative(?)
-    if ((c & 0x60) == 0x60) {
-        v |= (uint32_t) ((int32_t) -0x20);
-    }
-    uint8_t j=0;
-    for (int i=0; i<length; i++) {
-        c = *(bytes+i);
-        v = (v << 7) | (c & 0x7F);
-        j+=1;
+//     //if vlq is negative(?)
+//     if ((c & 0x60) == 0x60) {
+//         v |= (uint32_t) ((int32_t) -0x20);
+//     }
+//     uint8_t j=0;
+//     for (int i=0; i<length; i++) {
+//         c = *(bytes+i);
+//         v = (v << 7) | (c & 0x7F);
+//         j+=1;
 
-        if ((c & 0x80) != 0x80){
-            break;
-        }
+//         if ((c & 0x80) != 0x80){
+//             break;
+//         }
 
-    }
-    VarInt var = VarInt{v,j};
-    return var;
-}
+//     }
+//     VarInt var = VarInt{v,j};
+//     return var;
+// }
 
 uint16_t KlipperCommander::parse_crc(uint8_t* msg, uint8_t length) {
     uint16_t crc = (uint16_t) *(msg+length-3) << 8 | (uint16_t) *(msg+length-2);
@@ -436,26 +539,26 @@ void print_byte_array(uint8_t* arr, uint8_t len){
     DEBUG_PRINT("\n");
 }
 
-// copy+paste from klipper, rewrite without goto
-uint8_t KlipperCommander::encode_vlq_int(uint8_t *p, uint32_t v) {
-    int32_t sv = v;
-    uint8_t bytes=0;
-    if (sv < (3L<<5)  && sv >= -(1L<<5))  goto f4;
-    if (sv < (3L<<12) && sv >= -(1L<<12)) goto f3;
-    if (sv < (3L<<19) && sv >= -(1L<<19)) goto f2;
-    if (sv < (3L<<26) && sv >= -(1L<<26)) goto f1;
-    *p++ = (v>>28) | 0x80;
-    bytes+=1;
-f1: *p++ = ((v>>21) & 0x7f) | 0x80;
-    bytes+=1;
-f2: *p++ = ((v>>14) & 0x7f) | 0x80;
-    bytes+=1;
-f3: *p++ = ((v>>7) & 0x7f) | 0x80;
-    bytes+=1;
-f4: *p++ = v & 0x7f;
-    bytes+=1;
-    return bytes;
-}
+// // copy+paste from klipper, rewrite without goto
+// uint8_t KlipperCommander::encode_vlq_int(uint8_t *p, uint32_t v) {
+//     int32_t sv = v;
+//     uint8_t bytes=0;
+//     if (sv < (3L<<5)  && sv >= -(1L<<5))  goto f4;
+//     if (sv < (3L<<12) && sv >= -(1L<<12)) goto f3;
+//     if (sv < (3L<<19) && sv >= -(1L<<19)) goto f2;
+//     if (sv < (3L<<26) && sv >= -(1L<<26)) goto f1;
+//     *p++ = (v>>28) | 0x80;
+//     bytes+=1;
+// f1: *p++ = ((v>>21) & 0x7f) | 0x80;
+//     bytes+=1;
+// f2: *p++ = ((v>>14) & 0x7f) | 0x80;
+//     bytes+=1;
+// f3: *p++ = ((v>>7) & 0x7f) | 0x80;
+//     bytes+=1;
+// f4: *p++ = v & 0x7f;
+//     bytes+=1;
+//     return bytes;
+// }
 
 void KlipperCommander::update_stats(uint32_t current_time) {
     uint32_t looptime = current_time - loop_start_time;
@@ -492,7 +595,7 @@ void KlipperCommander::update_stats(uint32_t current_time) {
     offset+= encode_vlq_int(msg+offset, stats_loop_count);
     offset+= encode_vlq_int(msg+offset, stats_sum);
     offset+= encode_vlq_int(msg+offset, stats_sumsq);
-    enqueue_response(latest_outgoing_sequence-1, msg, offset);
+    enqueue_response(latest_outgoing_sequence, msg, offset);
 
     prev_stats_send = current_time;
     stats_loop_count = 0;

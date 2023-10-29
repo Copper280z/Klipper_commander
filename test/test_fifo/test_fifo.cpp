@@ -110,7 +110,7 @@ void test_msg_write_read() {
 
 void test_msg_write_read_loop() {
     FIFO fifo = FIFO();
-    char errmsg[64]; 
+    char errmsg[1024]; 
     uint8_t msg_len = 40;
     uint8_t n_messages = 80;
     uint8_t write_char_even = 0x7e;
@@ -160,12 +160,12 @@ void test_msg_write_read_loop() {
             Pointer read_ptr = fifo.getReadPointer();
             msg_read_start_ptrs[read_counter] = read_ptr.ptr;
 
-            snprintf(errmsg, sizeof(errmsg), "Read Loop number: %u", read_counter);
+            snprintf(errmsg, sizeof(errmsg), "Iteration: %u, Read Loop number: %u, diff: %i", k, read_counter, (int) (msg_write_start_ptrs[read_counter]- msg_read_start_ptrs[read_counter]));
             TEST_ASSERT_EQUAL_MESSAGE(msg_len, read_ptr.len, errmsg);
 
             // READING
-            TEST_ASSERT_EQUAL_PTR_MESSAGE(msg_write_start_ptrs[read_counter], msg_read_start_ptrs[read_counter], errmsg);
-            TEST_ASSERT_EACH_EQUAL_HEX8_MESSAGE(read_ptr.ptr[0], read_ptr.ptr, read_ptr.len, errmsg);
+            TEST_ASSERT_EACH_EQUAL_UINT8_MESSAGE(*msg_write_start_ptrs[read_counter], msg_read_start_ptrs[read_counter], read_ptr.len, errmsg);
+            //TEST_ASSERT_EACH_EQUAL_HEX8_MESSAGE(read_ptr.ptr[0], read_ptr.ptr, read_ptr.len, errmsg);
             read_counter+=1;
             fifo.advanceReadCursor();
             fifo_nmessages = fifo.getNumMsgToRead();

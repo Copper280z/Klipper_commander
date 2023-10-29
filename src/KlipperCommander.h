@@ -6,6 +6,9 @@
 #include "fifo.h"
 #include <stdint.h>
 #include "MotionQueue.h"
+#include "trsync.h"
+#include "EndStop.h"
+#include "vlq.h"
 
 #ifdef USE_TINYUSB
 #include <Adafruit_TinyUSB.h>
@@ -16,6 +19,9 @@
 #define DEBUG_PRINT if (DEBUG) Serial.print
 #define DEBUG_PRINTLN if (DEBUG) Serial.print
 
+#define MAX_ENDSTOPS 4
+#define MAX_TRSYNCS 10
+
 #define COMMAND_QUEUE_LEN 64
 #define SEND_QUEUE_LEN 64
 #define MAX_MESSAGE_LEN 64
@@ -24,15 +30,18 @@
 #define SUMSQ_BASE 256
 #define SYNC_BYTE 0x7e
 
+
+
+
 struct ObjID {
     bool allocated;
     uint32_t oid;
 };
 
-struct VarInt {
-	uint32_t value;
-	uint8_t length;
-};
+// struct VarInt {
+// 	uint32_t value;
+// 	uint8_t length;
+// };
 
 class KlipperCommander {
 	public:
@@ -44,7 +53,8 @@ class KlipperCommander {
 			KlipperCommander(Adafruit_USBD_CDC &Serial);
 		#else
 			KlipperCommander(Stream &Serial);
-			KlipperCommander(Stream &Serial, void* clock);
+			// KlipperCommander(Stream &Serial, uint32_t (*clock)(void));
+        
 		#endif
 
 
@@ -60,10 +70,15 @@ class KlipperCommander {
 
         uint32_t (*clock)(void);
         MotionQueue move_queue;
+        // MotionQueue motor_queues[3];
+
+
+        TrSync trsync_objs[MAX_TRSYNCS];
+        EndStop endstop_objs[MAX_TRSYNCS];
 
         ObjID stepper_obj;
-        ObjID trsync_obj;
-        ObjID endstop_obj;
+        // ObjID trsync_obj;
+        // ObjID endstop_obj;
         
 	private:
 		#ifdef USE_TINYUSB
@@ -84,9 +99,9 @@ class KlipperCommander {
 		int32_t command_dispatcher(uint32_t cmd_id,uint8_t sequence, uint8_t *msg, uint8_t length);
 
 		uint16_t crc16(uint8_t *arr, uint8_t length);
-		VarInt parse_vlq_int(uint8_t* bytes, uint8_t length);
+		// VarInt parse_vlq_int(uint8_t* bytes, uint8_t length);
 
-		uint8_t encode_vlq_int(uint8_t* p, uint32_t value);
+		// uint8_t encode_vlq_int(uint8_t* p, uint32_t value);
 
 		uint16_t parse_crc(uint8_t* msg, uint8_t length);
 

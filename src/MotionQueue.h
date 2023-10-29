@@ -2,6 +2,7 @@
 #define _MOTIONQUEUE
 
 #include "Arduino.h"
+#include "trsync.h"
 
 #define MOVE_QUEUE_LEN 128
 
@@ -16,6 +17,8 @@ struct MoveData {
     int32_t add;
     int8_t dir;
 };
+
+
 
 class MotionQueue {
     public:
@@ -32,6 +35,8 @@ class MotionQueue {
 		void attach(float &position, float &velocity_ff);
 		void attach(float &position);
 
+        void attach_trsync(TrSync &new_trsync);
+
         // function call in main loop updates attached variables
         void update();
         
@@ -39,11 +44,12 @@ class MotionQueue {
         uint8_t getCapacity();
         uint8_t getSize();
 
-        float *position_var;
-        float *velocity_var;
-        float *acceleration_var;
+        float *position_var = NULL;
+        float *velocity_var = NULL;
+        float *acceleration_var = NULL;
         
-        
+        TrSync *trsync = NULL;
+
         unsigned long (*clock)(void);
         uint32_t previous_time;
 
