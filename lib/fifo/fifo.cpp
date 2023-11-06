@@ -31,13 +31,28 @@ Pointer FIFO::getWritePointer() {
 }
 
 void FIFO::advanceWriteCursorN(uint8_t n_bytes) {
-    write_cursor += n_bytes;
-    *write_message_length_p += n_bytes;
+    // This function has the opportunity to increment the cursor outside of the array in some cases
+    // Needs to be managed, possibly outside of this function?
+
+    uint8_t *new_cursor = &write_cursor[n_bytes];
+    if (new_cursor <= array_end && new_cursor >= array_start) {
+        write_cursor = new_cursor;
+        *write_message_length_p += n_bytes;
+    }
+    
 }
 
 void FIFO::setWriteCursorToStart() {
     write_cursor = start_current_write;
 
+}
+
+void FIFO::setWriteCursorOffsetFromStart(uint8_t offset) {
+    uint8_t *new_cursor = &start_current_write[offset];
+    if (new_cursor <= array_end && new_cursor >= array_start) {
+        write_cursor = new_cursor;
+        *write_message_length_p = offset;
+    }
 }
 
 uint8_t FIFO::finalizeMessage() {
@@ -87,7 +102,7 @@ void FIFO::advanceReadCursor() {
 }
 
 uint8_t FIFO::currentWriteMsgGetByteAt(uint8_t idx) {
-    uint8_t current_byte = *(start_current_write+idx);
+    uint8_t current_byte = start_current_write[idx];
     return current_byte;
 }
 
@@ -125,4 +140,22 @@ uint8_t FIFO::getNumMsgToRead() {
         n_messages = MAX_N_MSGS + ptr_diff;
     }
     return n_messages;
+}
+
+uint8_t FIFO::confirm_msg(uint8_t msg_len) {
+    
+    uint8_t *new_start = &start_current_write[msg_len-1];
+
+    if (new_start == write_cursor) {
+        return finalizeMessage();
+    } else if (((&start_current_write[0] < write_cursor) && (new_start > write_cursor)) || (new_start > array_end)){
+        return 1; //error condition
+    } 
+
+    start_current_write = new_start;
+
+    *write_message_length_p = msg_len;
+    advance_msg_len_write_ptr();
+    *write_message_length_p = 0;
+    return 0;
 }

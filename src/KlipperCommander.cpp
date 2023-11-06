@@ -79,8 +79,8 @@ void KlipperCommander::recieve_serial() {
             DEBUG_PRINTLN("Valid Message!");
             uint8_t sequence = incoming_fifo.currentWriteMsgGetByteAt(1);
             ACK(sequence);
-            incoming_fifo.advanceWriteCursorN(msg_length);
-            incoming_fifo.finalizeMessage();
+            incoming_fifo.confirm_msg(msg_length);
+            // incoming_fifo.finalizeMessage();
             bytes_available -= msg_length;
             msg_length = incoming_fifo.currentWriteMsgGetByteAt(0);
         } else {
@@ -91,14 +91,15 @@ void KlipperCommander::recieve_serial() {
             bool sync=false;
             for (int i=0;i<bytes_available;i++) {
                 uint8_t curr_byte = incoming_fifo.currentWriteMsgGetByteAt(i);
-                uint8_t next_byte = incoming_fifo.currentWriteMsgGetByteAt(i);
+                uint8_t next_byte = incoming_fifo.currentWriteMsgGetByteAt(i+1);
                 DEBUG_PRINTF("0x%x\n", curr_byte);
-                if (curr_byte == SYNC_BYTE && (i+1) < bytes_available && next_byte < MAX_MESSAGE_LEN) {
+                if ((curr_byte == SYNC_BYTE) && ((i+1) < bytes_available) && (next_byte < MAX_MESSAGE_LEN)) {
                     memcpy(msg_ptr, msg_ptr+i+1, bytes_available-i+1);
                     //should I zero out the memory that's copied from and is now expected to be "unoccupied"??
                     bytes_available -= i;
                     sync=true;
                     msg_length = incoming_fifo.currentWriteMsgGetByteAt(0);
+                    incoming_fifo.setWriteCursorOffsetFromStart(bytes_available);
                     break;
                 }
             }

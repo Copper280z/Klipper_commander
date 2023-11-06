@@ -62,6 +62,7 @@ class FIFO {
          *  1 = Error
         *****************/        
         uint8_t finalizeMessage();
+        // uint8_t finalizeMessage(uint8_t len_from_start);
 
         /**************** 
          * returns a struct containing the pointer to the location of the message in the array
@@ -91,6 +92,12 @@ class FIFO {
 
         uint8_t illegal_read_pointer_overtake=0;
 
+        void advance_msg_len_write_ptr();
+
+        uint8_t confirm_msg(uint8_t msg_len);
+        void setWriteCursorOffsetFromStart(uint8_t offset);
+        // void advance_msg_len_write_ptr(int set_val);
+
     private:
 
         uint8_t message_length[MAX_N_MSGS]; // each value is the number of bytes contained in a single, valid, message
@@ -106,7 +113,7 @@ class FIFO {
         uint8_t* start_current_write; // pointer to the start of the current working message
         // uint8_t current_write_msg_length; // counter for length of current message
 
-        void advance_msg_len_write_ptr();
+        
         void advance_msg_len_read_ptr();
 };
 
