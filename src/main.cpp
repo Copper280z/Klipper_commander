@@ -4,6 +4,8 @@
 #include "pins_arduino.h"
 #include "variant_BLACKPILL_F401CC.h"
 
+HardwareSerial Serial2(USART2);
+
 KlipperCommander k_commander = KlipperCommander(Serial);
 
 bool led_state;
@@ -12,7 +14,8 @@ uint32_t led_timer;
 void setup() {
   pinMode(LED_BUILTIN, OUTPUT);
   Serial.begin(115200);
-  
+  Serial2.begin(115200);
+
   digitalWrite(LED_BUILTIN, LOW);
   led_state = false;
   led_timer = micros();

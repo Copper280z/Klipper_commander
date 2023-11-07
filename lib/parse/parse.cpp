@@ -5,6 +5,7 @@ msg_location_t find_message(uint8_t *array, uint8_t len, uint8_t next_seq) {
     uint16_t msg_crc, crc;
     msg_location_t retval = msg_location_t{-10,0,0,0}; 
 
+    // wait for more data
     if (len < 5) {
         return retval;
     }
@@ -18,7 +19,7 @@ msg_location_t find_message(uint8_t *array, uint8_t len, uint8_t next_seq) {
         }
 
         // end of message isn't here yet, return and try again later
-        if (start_b >= len) {
+        if ((start_b+i) > len) {
             retval.valid_message = -1;
             retval.start_cnt = i;
             return retval;
@@ -53,7 +54,8 @@ msg_location_t find_message(uint8_t *array, uint8_t len, uint8_t next_seq) {
         return retval;
 
     }
-
+    retval.valid_message = -3;
+    retval.start_cnt = len;
     return retval;
 
 }

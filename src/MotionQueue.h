@@ -6,10 +6,10 @@
 
 #define MOVE_QUEUE_LEN 128
 
-#define DEBUG 0
-#define DEBUG_PRINTF if (DEBUG) Serial.printf
-#define DEBUG_PRINT if (DEBUG) Serial.print
-#define DEBUG_PRINTLN if (DEBUG) Serial.print
+// #define DEBUG 0
+// #define DEBUG_PRINTF if (DEBUG) Serial.printf
+// #define DEBUG_PRINT if (DEBUG) Serial.print
+// #define DEBUG_PRINTLN if (DEBUG) Serial.print
 
 struct MoveData {
     uint32_t interval;

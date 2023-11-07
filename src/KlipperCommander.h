@@ -9,15 +9,16 @@
 #include "trsync.h"
 #include "EndStop.h"
 #include "vlq.h"
+#include "parse.h"
 
 #ifdef USE_TINYUSB
 #include <Adafruit_TinyUSB.h>
 #endif
 
-#define DEBUG 0
-#define DEBUG_PRINTF if (DEBUG) Serial.printf
-#define DEBUG_PRINT if (DEBUG) Serial.print
-#define DEBUG_PRINTLN if (DEBUG) Serial.print
+#define DEBUG_P 1
+#define DEBUG_PRINTF if (DEBUG_P) Serial2.printf
+#define DEBUG_PRINT if (DEBUG_P) Serial2.print
+#define DEBUG_PRINTLN if (DEBUG_P) Serial2.println
 
 #define MAX_ENDSTOPS 4
 #define MAX_TRSYNCS 10
@@ -113,6 +114,7 @@ class KlipperCommander {
 		uint32_t stats_sum;
 		uint32_t stats_sumsq;
 
+        uint8_t next_seq = 0x10 | 0x01;
 		// uint8_t output_buffer[SEND_QUEUE_LEN][64];
 		// uint8_t out_buf_write_idx = 0;
 		// uint8_t out_buf_send_idx = 0;

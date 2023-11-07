@@ -51,7 +51,7 @@ void MotionQueue::update() {
     if (elapsed_time > current_move.interval) {
         float delta_counts = (float) elapsed_time / (float) current_move.interval; 
         if (delta_counts > 2) {
-            DEBUG_PRINTF("Possibly Meaningful Warning, loop rate slower than step rate: %.2f\n", delta_counts);
+            // DEBUG_PRINTF("Possibly Meaningful Warning, loop rate slower than step rate: %.2f\n", delta_counts);
         }
         
         // make sure we don't move beyond the commanded move

@@ -20,7 +20,8 @@ void KlipperCommander::handle() {
     send_serial();
 
     uint32_t current_time = micros();
-    if (!!host_config_crc && false) {
+
+    if (!!host_config_crc) {
         update_stats(current_time);
         move_queue.update();
     }
@@ -50,63 +51,54 @@ void KlipperCommander::recieve_serial() {
     }
 
     if (bytes_read == 0) return;
+    DEBUG_PRINTF("Got %u bytes from serial port\n",bytes_read);
     print_byte_array(curr_write.ptr, bytes_read);
 
-    uint8_t msg_length = incoming_fifo.currentWriteMsgGetByteAt(0);
-    uint8_t msg_bytes_already_recvd = incoming_fifo.getCurrentWriteMsgLength();
+    uint8_t bytes_available = bytes_read;
+    int ptr_offset = 0;
+    while (bytes_available > MIN_MESSAGE_LEN) {
+        msg_location_t msg = find_message(curr_write.ptr+ptr_offset, bytes_read, next_seq);
+        if (msg.start != NULL) {
+            DEBUG_PRINTLN("Found Message: ");
+            print_byte_array(msg.start, msg.end-msg.start+1);
+        }
 
-    uint8_t bytes_available = msg_bytes_already_recvd + bytes_read;
-    // DEBUG_PRINTF("Now have %u bytes available to do stuff with\n", bytes_available);
-    
-    if ((bytes_available)  < msg_length){
-        incoming_fifo.advanceWriteCursorN(bytes_read);
-        return;
-    }
+        if (msg.start_cnt>0) {
+            DEBUG_PRINTF("discarding %i bytes\n", msg.start_cnt);
+            bytes_available -= msg.start_cnt;
+            memmove(curr_write.ptr, curr_write.ptr+msg.start_cnt, bytes_available-msg.start_cnt);
 
-    // if we have enough bytes to complete the message
-    while ( bytes_available  >= msg_length && bytes_available != 0 ) {
+            for (int i=0;i<msg.start_cnt;i++) {
+                curr_write.ptr[(int)bytes_available+i] = 0;
+            }
+        }
 
-        uint8_t msg_sync = incoming_fifo.currentWriteMsgGetByteAt(msg_length-1);
-        uint8_t* msg_ptr = incoming_fifo.getCurrentWriteMsgStart();
-        uint16_t msg_crc = parse_crc(msg_ptr, msg_length);
-        uint16_t calc_crc = crc16(msg_ptr, msg_length-3);
-        DEBUG_PRINTF("msg length: 0x%x\n", msg_length);
-        DEBUG_PRINTF("msg sync:    0x%x\n", msg_sync);
-        DEBUG_PRINTF("calc'd crc: 0x%x\n", calc_crc);
-        DEBUG_PRINTF("msg crc:    0x%x\n", msg_crc);
-        
-        if (msg_sync == SYNC_BYTE && msg_crc == calc_crc && msg_length <= 64 && msg_length > 0) {
+        if (msg.valid_message == 0) {
             DEBUG_PRINTLN("Valid Message!");
-            uint8_t sequence = incoming_fifo.currentWriteMsgGetByteAt(1);
-            ACK(sequence);
-            incoming_fifo.confirm_msg(msg_length);
-            // incoming_fifo.finalizeMessage();
-            bytes_available -= msg_length;
-            msg_length = incoming_fifo.currentWriteMsgGetByteAt(0);
-        } else {
-            DEBUG_PRINTLN("Invalid Message!");
-            print_byte_array(msg_ptr, bytes_available);
-            // out of sync - look for a SYNC_BYTE and copy 
-            // everything after that back to the start of current msg, then start over
-            bool sync=false;
+            uint8_t len = msg.end-(msg.start-msg.start_cnt);
+            ptr_offset += len;
+            bytes_available -= len;
+            ACK(next_seq);
+            incoming_fifo.advanceWriteCursorN(len);
+            incoming_fifo.finalizeMessage();
+            next_seq = 0x10 | ((next_seq+1) & 0x0f);
+            print_byte_array(curr_write.ptr+ptr_offset, len);
+        } else if (msg.valid_message == -10 || msg.valid_message == -1) {
+            DEBUG_PRINTLN("not enough data, need to get more and try again");
+            incoming_fifo.advanceWriteCursorN(bytes_available);
+            break;
+        } else  {
+            if (msg.valid_message == -2) {
+                DEBUG_PRINTLN("Got valid message, but wrong sequence byte, NACK");
+            }
+            // can't find anything resembling a valid message, nak and try again
+            NACK(next_seq);
+            incoming_fifo.setWriteCursorToStart();
+            curr_write =  incoming_fifo.getWritePointer();
             for (int i=0;i<bytes_available;i++) {
-                uint8_t curr_byte = incoming_fifo.currentWriteMsgGetByteAt(i);
-                uint8_t next_byte = incoming_fifo.currentWriteMsgGetByteAt(i+1);
-                DEBUG_PRINTF("0x%x\n", curr_byte);
-                if ((curr_byte == SYNC_BYTE) && ((i+1) < bytes_available) && (next_byte < MAX_MESSAGE_LEN)) {
-                    memcpy(msg_ptr, msg_ptr+i+1, bytes_available-i+1);
-                    //should I zero out the memory that's copied from and is now expected to be "unoccupied"??
-                    bytes_available -= i;
-                    sync=true;
-                    msg_length = incoming_fifo.currentWriteMsgGetByteAt(0);
-                    incoming_fifo.setWriteCursorOffsetFromStart(bytes_available);
-                    break;
-                }
+                curr_write.ptr[i] = 0;
             }
-            if (sync==false) {
-                bytes_available = 0;
-                incoming_fifo.setWriteCursorToStart();
-            }
+            break;
         }
     }
 }
@@ -131,7 +123,7 @@ void KlipperCommander::parse_message() {
         uint8_t sequence = *(read_ptr.ptr+1);
         DEBUG_PRINTF("sequence low bytes: %u\n", sequence & 0b00001111 );
 
-        int16_t command_bytes_available = read_ptr.len-MIN_MESSAGE_LEN;
+        int16_t command_bytes_available = read_ptr.len-MIN_MESSAGE_LEN+1;
         int32_t bytes_consumed=0;
         while (command_bytes_available>0) {
             DEBUG_PRINTF("Command bytes available: %u\n", command_bytes_available);
@@ -165,6 +157,7 @@ int32_t KlipperCommander::command_dispatcher(uint32_t cmd_id, uint8_t sequence, 
             break;
         }
         case 4:{ //Uptime
+            DEBUG_PRINTLN("Serving Uptime");
             current_time = micros();
 
             uint8_t new_msg[64];

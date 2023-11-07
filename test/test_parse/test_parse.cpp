@@ -1,4 +1,5 @@
 
+#include <cstdint>
 #include <unity.h>
 #include <ArduinoFake.h>
 #include <unordered_map>  
@@ -42,6 +43,8 @@ void test_encode_decode() {
         TEST_PRINTF("len: %i\n", len);
 
         msg_location_t ret = find_message(&file_bytes[i], len, next_seq);
+        
+        TEST_ASSERT(0, ret.valid_message);
 
         TEST_PRINTF("valid: %i, cnt: %i, start: %p, end: %p", ret.valid_message, ret.start_cnt, ret.start, ret.end);
         if (ret.valid_message == 0 || ret.valid_message == -1) {
@@ -49,6 +52,8 @@ void test_encode_decode() {
             bytes_remaining -= i;
 
         }
+
+        next_seq = 0x10 | (uint8_t) (i & 0x0f);
 
     }
 
