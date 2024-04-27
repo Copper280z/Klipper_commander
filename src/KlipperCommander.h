@@ -81,6 +81,7 @@ class KlipperCommander {
         // ObjID trsync_obj;
         // ObjID endstop_obj;
         uint8_t is_config = 0; 
+        uint8_t num_oids = 0;
 	private:
 		#ifdef USE_TINYUSB
 			Adafruit_USBD_CDC &serial;

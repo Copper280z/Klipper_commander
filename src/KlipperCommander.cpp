@@ -60,13 +60,22 @@ void KlipperCommander::recieve_serial() {
         msg_location_t msg = find_message(curr_write.ptr+ptr_offset, bytes_read, next_seq);
         if (msg.start != NULL) {
             DEBUG_PRINTLN("Found Message: ");
+            DEBUG_PRINTF("  Status: %d\n",msg.valid_message);
+            DEBUG_PRINTF("  ");
             print_byte_array(msg.start, msg.end-msg.start+1);
+            DEBUG_PRINTF("  ");
+            print_byte_array(curr_write.ptr+ptr_offset, msg.end-msg.start+msg.start_cnt);
         }
 
         if (msg.start_cnt>0) {
-            DEBUG_PRINTF("discarding %i bytes\n", msg.start_cnt);
+            DEBUG_PRINTF("  Start byte offset: %u\n",msg.start_cnt);
+            DEBUG_PRINTF("  ");
+            print_byte_array(curr_write.ptr+ptr_offset, msg.end-msg.start+msg.start_cnt);
+            DEBUG_PRINTF("  discarding %i bytes\n", msg.start_cnt);
             bytes_available -= msg.start_cnt;
-            memmove(curr_write.ptr, curr_write.ptr+msg.start_cnt, bytes_available-msg.start_cnt);
+            memmove(curr_write.ptr+ptr_offset, curr_write.ptr+msg.start_cnt, bytes_available-msg.start_cnt);
+            DEBUG_PRINTF("  ");
+            print_byte_array(curr_write.ptr+ptr_offset, msg.end-msg.start+msg.start_cnt);
 
             for (int i=0;i<msg.start_cnt;i++) {
                 curr_write.ptr[(int)bytes_available+i] = 0;
@@ -74,23 +83,24 @@ void KlipperCommander::recieve_serial() {
         }
 
         if (msg.valid_message == 0) {
-            DEBUG_PRINTLN("Valid Message!");
+            DEBUG_PRINTLN("  Valid Message!");
             uint8_t len = msg.end-(msg.start-msg.start_cnt);
-            ptr_offset += len;
-            bytes_available -= len;
+            ptr_offset += len+1;
+            bytes_available -= len+1;
             ACK(next_seq);
-            incoming_fifo.advanceWriteCursorN(len);
+            incoming_fifo.advanceWriteCursorN(len+1);
             incoming_fifo.finalizeMessage();
             next_seq = 0x10 | ((next_seq+1) & 0x0f);
+            DEBUG_PRINTF("  ");
             print_byte_array(curr_write.ptr+ptr_offset, len);
         } else if (msg.valid_message == -10 || msg.valid_message == -1) {
-            DEBUG_PRINTLN("not enough data, need to get more and try again");
+            DEBUG_PRINTLN("  not enough data, need to get more and try again");
             incoming_fifo.advanceWriteCursorN(bytes_available);
             break;
         } else  {
             if (msg.valid_message == -2) {
-                DEBUG_PRINTLN("Got valid message, but wrong sequence byte, NACK");
-                DEBUG_PRINTF("Expected %u, got %u\n", next_seq, 0);
+                DEBUG_PRINTLN("  Got valid message, but wrong sequence byte, NACK");
+                DEBUG_PRINTF("    Expected %u, got %u\n", next_seq, 0);
             }
             // can't find anything resembling a valid message, nak and try again
             NACK(next_seq);
@@ -124,7 +134,7 @@ void KlipperCommander::parse_message() {
         uint8_t sequence = *(read_ptr.ptr+1);
         DEBUG_PRINTF("sequence low bytes: %u\n", sequence & 0b00001111 );
 
-        int16_t command_bytes_available = read_ptr.len-MIN_MESSAGE_LEN+1;
+        int16_t command_bytes_available = read_ptr.len-MIN_MESSAGE_LEN;
         int32_t bytes_consumed=0;
         while (command_bytes_available>0) {
             DEBUG_PRINTF("Command bytes available: %u\n", command_bytes_available);
@@ -220,6 +230,11 @@ int32_t KlipperCommander::command_dispatcher(uint32_t cmd_id, uint8_t sequence, 
         }
         case 8: { // allocate_oids count=%c
         // maybe this can be a nop, since I'd rather everything be static anyhow
+            VarInt oids = parse_vlq_int((msg+1), length-1);
+            bytes_consumed += oids.length;
+            num_oids = oids.value;
+            DEBUG_PRINTF("Alloccating %u oids\n", num_oids);
+            
         break;
         }
         case 9: { //debug_nop
@@ -247,6 +262,7 @@ int32_t KlipperCommander::command_dispatcher(uint32_t cmd_id, uint8_t sequence, 
             VarInt oid_var = parse_vlq_int((msg+1), length-1);
             VarInt clock_var = parse_vlq_int((msg+1), length-1+oid_var.length);
             move_queue.previous_time = clock_var.value;
+            bytes_consumed+=oid_var.length + clock_var.length;
             
         break;
         }
@@ -254,7 +270,7 @@ int32_t KlipperCommander::command_dispatcher(uint32_t cmd_id, uint8_t sequence, 
             VarInt oid_var = parse_vlq_int((msg+1), length-1);
             VarInt dir_var = parse_vlq_int((msg+1), length-1+oid_var.length);
             move_queue.host_dir = (int8_t) dir_var.value;
-        
+            bytes_consumed+=oid_var.length + dir_var.length;
         break;
         }
         case 22: { // queue_step oid=%c interval=%u count=%hu add=%hi
@@ -269,12 +285,25 @@ int32_t KlipperCommander::command_dispatcher(uint32_t cmd_id, uint8_t sequence, 
             
             MoveData new_move = MoveData{interval_var.value, count_var.value, (int32_t) add_var.value, move_queue.host_dir}; 
             move_queue.push(new_move);
+            bytes_consumed+=add_var.length+offset;
         break;
         }
         case 23: { // config_stepper oid=%c step_pin=%c dir_pin=%c invert_step=%c step_pulse_ticks=%ku
             // can ignore everything except oid
+            uint8_t offset=0;
             VarInt oid_var = parse_vlq_int((msg+1), length-1);
+            offset += oid_var.length;
+            VarInt step_pin_var = parse_vlq_int((msg+1), length-1+offset);
+            offset += step_pin_var.length;
+            VarInt dir_pin_var = parse_vlq_int((msg+1), length-1+offset);
+            offset += dir_pin_var.length;
+            VarInt invert_step_var = parse_vlq_int((msg+1), length-1+offset);
+            offset += invert_step_var.length;
+            VarInt step_pulse_ticks_var = parse_vlq_int((msg+1), length-1+offset);
+            offset += step_pulse_ticks_var.length;
+            bytes_consumed+=offset;
             stepper_obj = ObjID{true, oid_var.value};
+            DEBUG_PRINTF("Allocated Motor with oid %u\n", oid_var.value);
             
         break;
         }
@@ -301,7 +330,15 @@ int32_t KlipperCommander::command_dispatcher(uint32_t cmd_id, uint8_t sequence, 
         break;
         }
         case 26: { // config_endstop oid=%c pin=%c pull_up=%c
+            uint8_t offset = 0;
             VarInt oid_var = parse_vlq_int((msg+1), length-1);
+            offset += oid_var.length;
+            VarInt pin_var = parse_vlq_int((msg+1), length-1+offset);
+            offset += pin_var.length;
+            VarInt pull_up_var = parse_vlq_int((msg+1), length-1+offset);
+            offset += pull_up_var.length;
+            bytes_consumed += offset;
+            DEBUG_PRINTF("Allocating endstop with oid: %u, pin: %u, pull_up: %u\n",oid_var.value, pin_var.value, pull_up_var.value);
         break;
         }
         // trsync returns a message when it is either triggered or the time runs out.
@@ -315,6 +352,8 @@ int32_t KlipperCommander::command_dispatcher(uint32_t cmd_id, uint8_t sequence, 
             VarInt oid_var = parse_vlq_int((msg+1), length-1);
             offset += oid_var.length;
             VarInt reason_var = parse_vlq_int((msg+1), length-1+offset);
+            offset += reason_var.length;
+            bytes_consumed += offset;
             for (int i=0;i<MAX_TRSYNCS;i++) {
                 if (!trsync_objs[i].allocated) {
                     continue;
@@ -332,6 +371,8 @@ int32_t KlipperCommander::command_dispatcher(uint32_t cmd_id, uint8_t sequence, 
             VarInt oid_var = parse_vlq_int((msg+1), length-1);
             offset += oid_var.length;
             VarInt expire_clock_var = parse_vlq_int((msg+1), length-1+offset);
+            offset += expire_clock_var.length;
+            bytes_consumed += offset;
             for (int i=0;i<MAX_TRSYNCS;i++) {
                 if (!trsync_objs[i].allocated) {
                     continue;
@@ -351,7 +392,8 @@ int32_t KlipperCommander::command_dispatcher(uint32_t cmd_id, uint8_t sequence, 
             VarInt report_ticks_var = parse_vlq_int((msg+1), length-1+offset);
             offset += report_ticks_var.length;
             VarInt expire_reason_var = parse_vlq_int((msg+1), length-1+offset);
-
+            offset += report_ticks_var.length;
+            bytes_consumed += offset;
             for (int i=0;i<MAX_TRSYNCS;i++) {
                 if (!trsync_objs[i].allocated) {
                     continue;
@@ -365,6 +407,7 @@ int32_t KlipperCommander::command_dispatcher(uint32_t cmd_id, uint8_t sequence, 
         }
         case 30: { // config_trsync oid=%c
             VarInt oid_var = parse_vlq_int((msg+1), length-1);
+            DEBUG_PRINTF("Allocating trsync with oid: %u\n",oid_var.value);
             for (int i=0;i<MAX_TRSYNCS;i++) {
                 if (!trsync_objs[i].allocated) {
                     trsync_objs[i].allocated = true;
@@ -372,6 +415,7 @@ int32_t KlipperCommander::command_dispatcher(uint32_t cmd_id, uint8_t sequence, 
                     break;
                 }
             }
+            bytes_consumed+= oid_var.length;
         break;
         }
         case 74: { // reset
