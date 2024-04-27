@@ -80,7 +80,7 @@ class KlipperCommander {
         ObjID stepper_obj;
         // ObjID trsync_obj;
         // ObjID endstop_obj;
-        
+        uint8_t is_config = 0; 
 	private:
 		#ifdef USE_TINYUSB
 			Adafruit_USBD_CDC &serial;
@@ -120,7 +120,7 @@ class KlipperCommander {
 		// uint8_t out_buf_send_idx = 0;
 
 		CONFIG_DICT
-		uint32_t host_config_crc;
+		uint32_t host_config_crc = 0;
 		//command handlers below
 		void send_config(uint8_t sequence, uint32_t offset, uint32_t amount) ;
 

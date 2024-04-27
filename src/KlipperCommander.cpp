@@ -90,6 +90,7 @@ void KlipperCommander::recieve_serial() {
         } else  {
             if (msg.valid_message == -2) {
                 DEBUG_PRINTLN("Got valid message, but wrong sequence byte, NACK");
+                DEBUG_PRINTF("Expected %u, got %u\n", next_seq, 0);
             }
             // can't find anything resembling a valid message, nak and try again
             NACK(next_seq);
@@ -128,7 +129,7 @@ void KlipperCommander::parse_message() {
         while (command_bytes_available>0) {
             DEBUG_PRINTF("Command bytes available: %u\n", command_bytes_available);
             VarInt cmd_id_var = parse_vlq_int(read_ptr.ptr+2+bytes_consumed, command_bytes_available);
-            DEBUG_PRINTF("Command ID:  %u\n", (int32_t) cmd_id_var.value);
+            DEBUG_PRINTF("Command ID:  %u\n", cmd_id_var.value);
             bytes_consumed = command_dispatcher(cmd_id_var.value, sequence, read_ptr.ptr+2+bytes_consumed, command_bytes_available);
             if (bytes_consumed < 0) {
                 DEBUG_PRINTF("bytes_consumed is < 0: %u\n", bytes_consumed);
@@ -178,10 +179,15 @@ int32_t KlipperCommander::command_dispatcher(uint32_t cmd_id, uint8_t sequence, 
             break;
         }
         case 6: { // finalize config
+            DEBUG_PRINTF("********************************************************\n");
             // uint8_t new_msg[64];
             // uint8_t resp_id = 81;
             VarInt config_crc_var = parse_vlq_int((msg+1), length-1);
             host_config_crc = config_crc_var.value;
+            DEBUG_PRINTF("finalize_config crc: %u\n", host_config_crc);
+            DEBUG_PRINTF("********************************************************\n");
+            bytes_consumed+=config_crc_var.length;
+            is_config = 1;
             // needs response with size of move queue
             // need to decide how to implement move queue
             // uint8_t offset = encode_vlq_int(new_msg, resp_id);
@@ -193,17 +199,22 @@ int32_t KlipperCommander::command_dispatcher(uint32_t cmd_id, uint8_t sequence, 
             break;    
         }
         case 7: { // get config - return config crc to host
+            DEBUG_PRINTF("********************************************************\n");
             uint8_t new_msg[64];
             uint8_t resp_id = 81;
-            VarInt config_crc_var = parse_vlq_int((msg+1), length-1);
-            host_config_crc = config_crc_var.value;
+            // VarInt config_crc_var = parse_vlq_int((msg+1), length-1);
+            // host_config_crc = config_crc_var.value;
             // needs response with size of move queue
             // need to decide how to implement move queue
             uint8_t offset = encode_vlq_int(new_msg, resp_id);
-            offset += encode_vlq_int(new_msg+offset, !!move_queue.getCapacity());
+            offset += encode_vlq_int(new_msg+offset, is_config);
             offset += encode_vlq_int(new_msg+offset, host_config_crc);
             offset += encode_vlq_int(new_msg+offset, 0); // is_shutdown
             offset += encode_vlq_int(new_msg+offset, move_queue.getCapacity());
+            DEBUG_PRINTF("Get_config response:\n");
+            print_byte_array(new_msg, offset);
+            DEBUG_PRINTF("Stored Host config crc: %u\n", host_config_crc);
+            DEBUG_PRINTF("********************************************************\n");
             enqueue_response(sequence, new_msg, offset);    
             break;
         }
@@ -364,12 +375,14 @@ int32_t KlipperCommander::command_dispatcher(uint32_t cmd_id, uint8_t sequence, 
         break;
         }
         case 74: { // reset
-        break;
+            host_config_crc = 0;
+            next_seq = 0x10 | 0x01;
+            is_config = 0;
+            break;
         }
         default:{
             bytes_consumed = -1;
             break;
-        break;
         }
     }
     return bytes_consumed;

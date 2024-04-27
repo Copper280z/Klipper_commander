@@ -3,6 +3,12 @@
 
 #include <stdint.h>
 
+enum ParseError{
+    NotEnoughBytes = -10,
+    MsgIncomplete = -1,
+    WrongSequence = -2,
+};
+
 typedef struct {
     int valid_message;
     int start_cnt;

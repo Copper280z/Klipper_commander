@@ -2,7 +2,7 @@
 
 #include "KlipperCommander.h"
 #include "pins_arduino.h"
-#include "variant_BLACKPILL_F401CC.h"
+#include "stdint.h"
 
 HardwareSerial Serial2(USART2);
 
@@ -13,8 +13,8 @@ uint32_t led_timer;
 
 void setup() {
   pinMode(LED_BUILTIN, OUTPUT);
-  Serial.begin(115200);
-  Serial2.begin(115200);
+  Serial.begin(200000);
+  Serial2.begin(2000000);
 
   digitalWrite(LED_BUILTIN, LOW);
   led_state = false;

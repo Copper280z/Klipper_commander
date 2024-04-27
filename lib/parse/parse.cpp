@@ -1,5 +1,5 @@
 #include "parse.h"
-
+#include "stdint.h"
 msg_location_t find_message(uint8_t *array, uint8_t len, uint8_t next_seq) {
     uint8_t start_b, sync_b;
     uint16_t msg_crc, crc;
