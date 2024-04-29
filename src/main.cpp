@@ -4,22 +4,23 @@
 #include "pins_arduino.h"
 #include "stdint.h"
 
-HardwareSerial Serial2(USART2);
+// HardwareSerial Serial1(USART2);
 
-KlipperCommander k_commander = KlipperCommander(Serial);
+KlipperCommander k_commander = KlipperCommander(Serial1);
 
 bool led_state;
 uint32_t led_timer;
 
 void setup() {
   pinMode(LED_BUILTIN, OUTPUT);
-  Serial.begin(200000);
-  Serial2.begin(2000000);
+  Serial.begin(12345);
+  Serial1.begin(250000);
 
   digitalWrite(LED_BUILTIN, LOW);
   led_state = false;
   led_timer = micros();
   delay(1000);
+  Serial.println("Hello Klipper!");
 }
 
 void loop() {
