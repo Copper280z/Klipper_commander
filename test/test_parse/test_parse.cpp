@@ -44,7 +44,7 @@ void test_encode_decode() {
 
         msg_location_t ret = find_message(&file_bytes[i], len, next_seq);
         
-        TEST_ASSERT(0, ret.valid_message);
+        TEST_ASSERT_EQUAL(0, ret.valid_message);
 
         TEST_PRINTF("valid: %i, cnt: %i, start: %p, end: %p", ret.valid_message, ret.start_cnt, ret.start, ret.end);
         if (ret.valid_message == 0 || ret.valid_message == -1) {
