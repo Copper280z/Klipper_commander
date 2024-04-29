@@ -3,17 +3,21 @@
 
 #include <stdint.h>
 
-enum ParseError{
-    NotEnoughBytes = -10,
-    MsgIncomplete = -1,
-    WrongSequence = -2,
-};
+namespace ParseError {
+    enum ParseError{
+        MsgValid = 0,
+        NotEnoughBytes = -10,
+        MsgIncomplete = -1,
+        WrongSequence = -2,
+    };
+}
 
 typedef struct {
     int valid_message;
     int start_cnt;
     uint8_t *start;
     uint8_t *end;
+    uint8_t len;
 } msg_location_t; 
 
 // take raw byte stream 

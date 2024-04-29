@@ -1,9 +1,10 @@
 #include "parse.h"
 #include "stdint.h"
+#include "Arduino.h"
 msg_location_t find_message(uint8_t *array, uint8_t len, uint8_t next_seq) {
     uint8_t start_b, sync_b;
     uint16_t msg_crc, crc;
-    msg_location_t retval = msg_location_t{-10,0,0,0}; 
+    msg_location_t retval = msg_location_t{ParseError::NotEnoughBytes,0,0,0,0}; 
 
     // wait for more data
     if (len < 5) {
@@ -20,37 +21,42 @@ msg_location_t find_message(uint8_t *array, uint8_t len, uint8_t next_seq) {
 
         // end of message isn't here yet, return and try again later
         if ((start_b+i) > len) {
-            retval.valid_message = -1;
+            retval.valid_message = ParseError::MsgIncomplete;
             retval.start_cnt = i;
             return retval;
         }
         
         sync_b = array[i+start_b-1];
         if (sync_b != 0x7e) {
+            // Serial2.printf("No sync! i: %u\n",i);
             continue;
         }
         
         uint8_t msg_sequence = array[i+1];
         if ((msg_sequence & ~0x0f) != 0x10) {
+            Serial2.printf("seq high byte mismatch! i: %u\n",i);
             continue;
         }
 
         msg_crc = parse_crc(&array[i], start_b);
         crc = crc16(&array[i], start_b-3);
         if (crc != msg_crc) {
+            Serial2.printf("CRC mismatch! i: %u\n",i);
             continue;
         }
 
         if (msg_sequence != next_seq) {
             //NAK, drop everything in the buffer and wait for next, correct, message
-            retval.valid_message = -2;
+            retval.valid_message = ParseError::WrongSequence;
+            Serial2.printf("seq low byte mismatch! i: %u\n",i);
             return retval;
         }
 
-        retval.valid_message = 0;
+        retval.valid_message = ParseError::MsgValid;
         retval.start_cnt = i;
         retval.start = &array[i];
         retval.end = &array[i+start_b-1];
+        retval.len = start_b;
         return retval;
 
     }
