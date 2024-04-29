@@ -4,10 +4,7 @@ VarInt parse_vlq_int(uint8_t* bytes, uint8_t length) {
     uint32_t c = bytes[0];
     uint32_t v = c & 0x7F;
 
-    //if vlq is negative(?)
-    if ((c & 0x60) == 0x60) {
-        v |= -0x20;
-    }
+
     uint8_t j=1;
     if ((c & 0x60) == 0x60)
         v |= -0x20;
