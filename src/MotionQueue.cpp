@@ -33,7 +33,7 @@ void MotionQueue::update() {
     if (trsync != NULL) {
         if (trsync->triggered) {
             current_move = MoveData{9999999,0,0,0};
-            while (queue_capacity != 0) {
+            while (queue_size != 0) {
                 pop();
             }
             trsync = NULL;

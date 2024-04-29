@@ -68,7 +68,7 @@ class MotionQueue {
         MoveData *head;
         MoveData *tail;
         uint8_t queue_size;
-        uint8_t queue_capacity;
+        uint8_t queue_capacity = MOVE_QUEUE_LEN;
         MoveData move_array[MOVE_QUEUE_LEN];
 };
 
