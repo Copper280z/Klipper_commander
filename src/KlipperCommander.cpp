@@ -13,12 +13,15 @@
         loop_start_time = micros();
         move_queue = MotionQueue();
 
+        for (size_t i=0;i<sizeof(in_buf);i++){
+            in_buf[i]=0;
+        }
+
     }
 #endif
 
 void KlipperCommander::handle() {
     recieve_serial();
-    parse_message();
     send_serial();
 
     uint32_t current_time = micros();
@@ -55,80 +58,33 @@ void KlipperCommander::recieve_serial() {
     // If we have previously unused bytes and recieve some more.
     //  - Put new bytes into the buffer after the previously recieved bytes
     //  - Start message search/validation at first unused byte, not at the start of new bytes
-    Pointer curr_write =  incoming_fifo.getWritePointer();
-
-    // DEBUG_PRINTF("Starting serial recv at: %#04x %#04x >%#04x< %#04x\n", *(curr_write.ptr-2),*(curr_write.ptr-1), *curr_write.ptr, *(curr_write.ptr+1));
-    uint8_t bytes_read = 0;
-    while (serial.available() > 0) {
-        if (bytes_read >= (curr_write.len-1)) break;
-        curr_write.ptr[bytes_read] = serial.read();
-        bytes_read +=1;
-    }
-
-    if (bytes_read == 0) return;
-    // DEBUG_PRINTF("Got %u bytes from serial port\n",bytes_read);
-    // print_byte_array(curr_write.ptr, bytes_read);
-
-    uint8_t new_bytes_available = bytes_read;
-    int ptr_offset = 0;
-
-    while (new_bytes_available > MIN_MESSAGE_LEN) {
-        uint8_t msg_bytes_available = new_bytes_available+incoming_fifo.getCurrentWriteMsgLength();
-        // msg_location_t msg = find_message(curr_write.ptr+ptr_offset, bytes_read, next_seq);
-        uint8_t *start_byte = incoming_fifo.getCurrentWriteMsgStart();
-        DEBUG_PRINTF("Starting msg search at: %#04x %#04x >%#04x< %#04x\n", *(start_byte-2),*(start_byte-1), *start_byte, *(start_byte+1));
-        DEBUG_PRINTF("bytes_available: %u\n",msg_bytes_available);
-        print_byte_array(start_byte, msg_bytes_available);
-        msg_location_t msg = find_message(start_byte, msg_bytes_available, next_seq);
-        if (msg.start != NULL) {
-            DEBUG_PRINTLN("Found Message: ");
-            DEBUG_PRINTF("  Status: %d\n",msg.valid_message);
-            DEBUG_PRINTF("  ");
-            print_byte_array(msg.start, msg.end-msg.start+1);
-            // DEBUG_PRINTF("  ");
-            // print_byte_array(curr_write.ptr+ptr_offset, msg.end-msg.start+msg.start_cnt);
+    while (serial.available())
+    {
+        uint8_t b = serial.read();
         
-
-            if (msg.start_cnt>0) {
-                DEBUG_PRINTF("  Start byte offset: %u\n",msg.start_cnt);
-                // DEBUG_PRINTF("  ");
-                // print_byte_array(curr_write.ptr+ptr_offset, msg.end-msg.start+msg.start_cnt);
-                DEBUG_PRINTF("  discarding %i bytes\n", msg.start_cnt);
-                new_bytes_available -= msg.start_cnt;
-                memmove(start_byte, start_byte+msg.start_cnt, msg_bytes_available-msg.start_cnt);
-                // DEBUG_PRINTF("  ");
-                // print_byte_array(curr_write.ptr+ptr_offset, msg.end-msg.start+msg.start_cnt);
-
-                for (int i=0;i<msg.start_cnt;i++) {
-                    start_byte[(int)msg_bytes_available+i] = 0;
-                }
-            }
-        } // if msg.start != NULL
-        bool break_loop = false;
+        in_buf[in_buf_idx++] = b;
+        msg_location_t msg = find_message(in_buf, in_buf_idx, next_seq);
+        
         switch (msg.valid_message) {
             case ParseError::MsgValid: 
                 {
                     DEBUG_PRINTLN("  Valid Message!");
-                    // uint8_t len = msg.end-(msg.start-msg.start_cnt);
-                    uint8_t len = msg.len-msg.start_cnt;
-                    ptr_offset += len;
-                    new_bytes_available -= len;
                     ACK(next_seq);
-                    incoming_fifo.advanceWriteCursorN(len);
-                    incoming_fifo.finalizeMessage();
+
+                    parse_message(msg);
+                    
+                    // byte after this message to the top of the buffer
+                    size_t bytes_left = in_buf_idx-msg.len;
+                    memmove(in_buf, msg.end, bytes_left);
+                    in_buf_idx = bytes_left;
                     next_seq = 0x10 | ((next_seq+1) & 0x0f);
-                    // DEBUG_PRINTF("  ");
-                    // print_byte_array(curr_write.ptr+ptr_offset, len);
                     break;
                 }
             case ParseError::NotEnoughBytes: 
             case ParseError::MsgIncomplete: 
                 {
-                    DEBUG_PRINTF("search idx at return: %d\n",msg.start_cnt);
-                    DEBUG_PRINTLN("  not enough data, need to get more and try again");
-                    incoming_fifo.advanceWriteCursorN(new_bytes_available);
-                    new_bytes_available-=new_bytes_available;
-                    break_loop = true;
+                    // DEBUG_PRINTF("search idx at return: %d\n",msg.start_cnt);
+                    // DEBUG_PRINTLN("  not enough data, need to get more and try again");
                     break;
                 }
             case ParseError::WrongSequence: 
@@ -136,57 +92,46 @@ void KlipperCommander::recieve_serial() {
                     DEBUG_PRINTLN("  Got valid message, but wrong sequence byte, NACK");
                     DEBUG_PRINTF("    Expected %u, got %u\n", next_seq&0xf, 0);
                     NACK(next_seq);
-                    incoming_fifo.setWriteCursorToStart();
-                    curr_write =  incoming_fifo.getWritePointer();
-                    for (int i=0;i<new_bytes_available;i++) {
-                        curr_write.ptr[i] = 0;
-                    }
-                    break_loop = true;
+                    in_buf_idx = 0;
                     break;
                 }
             case -3: 
                 {
-                    DEBUG_PRINTLN("  Have data but nothing that looks like a message?!");
-                    break_loop = true;
-                                
+                    DEBUG_PRINTLN("  Have data but nothing that looks like a message?!");                                
                 }
         } // switch (msg.valid_message)
-        if (break_loop) break;
-    } // while bytes > MIN_MESSAGE_LEN
-    incoming_fifo.advanceWriteCursorN(new_bytes_available);
-    Pointer ref = incoming_fifo.getWritePointer();
-    uint8_t *start_byte = ref.ptr;
-    DEBUG_PRINTF("Exiting rcv bytes at end: %#04x %#04x >%#04x< %#04x\n", *(start_byte-2),*(start_byte-1), *start_byte, *(start_byte+1));
-
-} // void recieve_serial
 
 
-void KlipperCommander::parse_message() {
-    // only try to parse up to command_idx-1, command_idx may be incomplete
-    uint8_t commands_to_parse = incoming_fifo.getNumMsgToRead();
+        if (in_buf_idx == (sizeof(in_buf)/sizeof(in_buf[0]))) {
+            in_buf_idx = 0;
+        }
+    } // while serial.available
 
-    while (commands_to_parse > 0) {
-        DEBUG_PRINTF("\n%d commands in queue\n", commands_to_parse);
-        Pointer read_ptr = incoming_fifo.getReadPointer();
+    return;
+}
 
-        DEBUG_PRINTF("Length of command being parsed: %d\n", read_ptr.len);
 
-        for (int i=0; i<read_ptr.len;i++){
-            DEBUG_PRINT(*(read_ptr.ptr+i), HEX);
+void KlipperCommander::parse_message(msg_location_t msg) {
+
+
+        DEBUG_PRINTF("Length of command being parsed: %d\n", msg.len);
+
+        for (int i=0; i<msg.len;i++){
+            DEBUG_PRINT(msg.start[i], HEX);
             DEBUG_PRINT(" ");
         }
         DEBUG_PRINT("\n");
 
-        uint8_t sequence = *(read_ptr.ptr+1);
+        uint8_t sequence = msg.start[1];
         DEBUG_PRINTF("sequence low bytes: %u\n", sequence & 0b00001111 );
 
-        int16_t command_bytes_available = read_ptr.len-MIN_MESSAGE_LEN;
+        int16_t command_bytes_available = msg.len-MIN_MESSAGE_LEN;
         int32_t bytes_consumed=2;
         while (command_bytes_available>0) {
             DEBUG_PRINTF("Command bytes available: %u\n", command_bytes_available);
-            VarInt cmd_id_var = parse_vlq_int(read_ptr.ptr+bytes_consumed, command_bytes_available);
+            VarInt cmd_id_var = parse_vlq_int(&msg.start[bytes_consumed], command_bytes_available);
             DEBUG_PRINTF("Command ID:  %u\n", cmd_id_var.value);
-            bytes_consumed += command_dispatcher(cmd_id_var.value, sequence, read_ptr.ptr+bytes_consumed, command_bytes_available);
+            bytes_consumed += command_dispatcher(cmd_id_var.value, sequence, &msg.start[bytes_consumed], command_bytes_available);
             if (bytes_consumed < 0) {
                 DEBUG_PRINTF("bytes_consumed is < 0: %u\n", bytes_consumed);
                 // not sure what that command was, so maybe we might be lost
@@ -196,9 +141,7 @@ void KlipperCommander::parse_message() {
             }
             command_bytes_available -= bytes_consumed;
         }
-        incoming_fifo.advanceReadCursor();
-        commands_to_parse = incoming_fifo.getNumMsgToRead();
-    }
+
 }
 
 int32_t KlipperCommander::command_dispatcher(uint32_t cmd_id, uint8_t sequence, uint8_t *msg, uint8_t length) {
@@ -236,46 +179,30 @@ int32_t KlipperCommander::command_dispatcher(uint32_t cmd_id, uint8_t sequence, 
         }
         case 6: { // finalize config
             DEBUG_PRINTF("********************************************************\n");
-            // uint8_t new_msg[64];
-            // uint8_t resp_id = 81;
             VarInt config_crc_var = parse_vlq_int((msg+1), length-1);
             host_config_crc = config_crc_var.value;
             DEBUG_PRINTF("finalize_config crc: %u\n", host_config_crc);
             DEBUG_PRINTF("********************************************************\n");
             bytes_consumed+=config_crc_var.length;
             is_config = 1;
-            // needs response with size of move queue
-            // need to decide how to implement move queue
-            // uint8_t offset = encode_vlq_int(new_msg, resp_id);
-            // offset += encode_vlq_int(new_msg+offset, !!move_queue.getCapacity());
-            // offset += encode_vlq_int(new_msg+offset, host_config_crc);
-            // offset += encode_vlq_int(new_msg+offset, 0); // is_shutdown
-            // offset += encode_vlq_int(new_msg+offset, move_queue.getCapacity());
-            // enqueue_response(sequence, new_msg, offset); 
             break;    
         }
         case 7: { // get config - return config crc to host
             DEBUG_PRINTF("********************************************************\n");
             uint8_t new_msg[64];
             uint8_t resp_id = 81;
-            // VarInt config_crc_var = parse_vlq_int((msg+1), length-1);
-            // host_config_crc = config_crc_var.value;
             // needs response with size of move queue
-            // need to decide how to implement move queue
             uint8_t offset = encode_vlq_int(new_msg, resp_id);
             offset += encode_vlq_int(new_msg+offset, is_config);
             offset += encode_vlq_int(new_msg+offset, host_config_crc);
             offset += encode_vlq_int(new_msg+offset, 0); // is_shutdown
             offset += encode_vlq_int(new_msg+offset, (uint16_t)move_queue.getCapacity());
-            DEBUG_PRINTF("Get_config response:\n");
-            // print_byte_array(new_msg, offset);
             DEBUG_PRINTF("Stored Host config crc: %u\n", host_config_crc);
             DEBUG_PRINTF("********************************************************\n");
             enqueue_response(sequence, new_msg, offset);    
             break;
         }
         case 8: { // allocate_oids count=%c
-        // maybe this can be a nop, since I'd rather everything be static anyhow
             VarInt oids = parse_vlq_int((msg+1), length-1);
             bytes_consumed += oids.length;
             num_oids = oids.value;
@@ -396,15 +323,12 @@ int32_t KlipperCommander::command_dispatcher(uint32_t cmd_id, uint8_t sequence, 
             VarInt add_var = parse_vlq_int((msg+1+offset), length-(1+offset));
             offset += add_var.length;
             DEBUG_PRINTF("Move queued: oid: %u - interval: %u - count: %u - add: %d\n", oid_var.value, interval_var.value, count_var.value, (int32_t)add_var.value);
-            // print_byte_array(msg, 10);
-            // DEBUG_PRINTF("offset: %u\n",offset);
             MoveData new_move = MoveData{interval_var.value, count_var.value, (int32_t) add_var.value, move_queue.host_dir}; 
             move_queue.push(new_move);
             bytes_consumed += offset;
         break;
         }
         case 23: { // config_stepper oid=%c step_pin=%c dir_pin=%c invert_step=%c step_pulse_ticks=%ku
-            // can ignore everything except oid
             uint8_t offset=0;
             VarInt oid_var = parse_vlq_int((msg+1), length-1);
             offset += oid_var.length;

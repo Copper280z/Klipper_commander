@@ -16,9 +16,9 @@
 #endif
 
 #define DEBUG_P 1
-#define DEBUG_PRINTF if (DEBUG_P) Serial2.printf
-#define DEBUG_PRINT if (DEBUG_P) Serial2.print
-#define DEBUG_PRINTLN if (DEBUG_P) Serial2.println
+#define DEBUG_PRINTF if (DEBUG_P) Serial.printf
+#define DEBUG_PRINT if (DEBUG_P) Serial.print
+#define DEBUG_PRINTLN if (DEBUG_P) Serial.println
 
 #define MAX_ENDSTOPS 4
 #define MAX_TRSYNCS 10
@@ -64,7 +64,7 @@ class KlipperCommander {
 		void attach(float &position);
 
 		void recieve_serial();
-		void parse_message();
+		void parse_message(msg_location_t msg);
 		void update_stats(uint32_t current_time);
 
 		void send_serial();
@@ -89,7 +89,8 @@ class KlipperCommander {
 			Stream &serial;
 		#endif
 
-		FIFO incoming_fifo;
+		uint8_t in_buf[256];
+		size_t in_buf_idx = 0;
 		FIFO outgoing_fifo;
 		uint8_t latest_outgoing_sequence;
 
@@ -101,9 +102,6 @@ class KlipperCommander {
 		int32_t command_dispatcher(uint32_t cmd_id,uint8_t sequence, uint8_t *msg, uint8_t length);
 
 		uint16_t crc16(uint8_t *arr, uint8_t length);
-		// VarInt parse_vlq_int(uint8_t* bytes, uint8_t length);
-
-		// uint8_t encode_vlq_int(uint8_t* p, uint32_t value);
 
 		uint16_t parse_crc(uint8_t* msg, uint8_t length);
 
