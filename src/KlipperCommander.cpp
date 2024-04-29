@@ -1,4 +1,6 @@
 #include "KlipperCommander.h"
+#include "parse.h"
+#include <cstdint>
 
 
 #ifdef USE_TINYUSB
@@ -40,9 +42,22 @@ void KlipperCommander::attach(float &position_p, float &velocity_p, float &accel
 }
 
 void KlipperCommander::recieve_serial() {
+    // desired state machine behavior
+    //
+    // If we had no message previously, or had a complete message with 
+    // no extra bytes at the end of the read
+    //  - validate/finalize message then advance write pointer to the end of message
+    //
+    // If we have a complete message with a few more bytes at the end.
+    //  - validate/finalize message.
+    //  - Move write pointer to end of bytes
+    //
+    // If we have previously unused bytes and recieve some more.
+    //  - Put new bytes into the buffer after the previously recieved bytes
+    //  - Start message search/validation at first unused byte, not at the start of new bytes
     Pointer curr_write =  incoming_fifo.getWritePointer();
 
-
+    // DEBUG_PRINTF("Starting serial recv at: %#04x %#04x >%#04x< %#04x\n", *(curr_write.ptr-2),*(curr_write.ptr-1), *curr_write.ptr, *(curr_write.ptr+1));
     uint8_t bytes_read = 0;
     while (serial.available() > 0) {
         if (bytes_read >= (curr_write.len-1)) break;
@@ -51,68 +66,99 @@ void KlipperCommander::recieve_serial() {
     }
 
     if (bytes_read == 0) return;
-    DEBUG_PRINTF("Got %u bytes from serial port\n",bytes_read);
-    print_byte_array(curr_write.ptr, bytes_read);
+    // DEBUG_PRINTF("Got %u bytes from serial port\n",bytes_read);
+    // print_byte_array(curr_write.ptr, bytes_read);
 
-    uint8_t bytes_available = bytes_read;
+    uint8_t new_bytes_available = bytes_read;
     int ptr_offset = 0;
-    while (bytes_available > MIN_MESSAGE_LEN) {
-        msg_location_t msg = find_message(curr_write.ptr+ptr_offset, bytes_read, next_seq);
+
+    while (new_bytes_available > MIN_MESSAGE_LEN) {
+        uint8_t msg_bytes_available = new_bytes_available+incoming_fifo.getCurrentWriteMsgLength();
+        // msg_location_t msg = find_message(curr_write.ptr+ptr_offset, bytes_read, next_seq);
+        uint8_t *start_byte = incoming_fifo.getCurrentWriteMsgStart();
+        DEBUG_PRINTF("Starting msg search at: %#04x %#04x >%#04x< %#04x\n", *(start_byte-2),*(start_byte-1), *start_byte, *(start_byte+1));
+        DEBUG_PRINTF("bytes_available: %u\n",msg_bytes_available);
+        print_byte_array(start_byte, msg_bytes_available);
+        msg_location_t msg = find_message(start_byte, msg_bytes_available, next_seq);
         if (msg.start != NULL) {
             DEBUG_PRINTLN("Found Message: ");
             DEBUG_PRINTF("  Status: %d\n",msg.valid_message);
             DEBUG_PRINTF("  ");
             print_byte_array(msg.start, msg.end-msg.start+1);
-            DEBUG_PRINTF("  ");
-            print_byte_array(curr_write.ptr+ptr_offset, msg.end-msg.start+msg.start_cnt);
-        }
+            // DEBUG_PRINTF("  ");
+            // print_byte_array(curr_write.ptr+ptr_offset, msg.end-msg.start+msg.start_cnt);
+        
 
-        if (msg.start_cnt>0) {
-            DEBUG_PRINTF("  Start byte offset: %u\n",msg.start_cnt);
-            DEBUG_PRINTF("  ");
-            print_byte_array(curr_write.ptr+ptr_offset, msg.end-msg.start+msg.start_cnt);
-            DEBUG_PRINTF("  discarding %i bytes\n", msg.start_cnt);
-            bytes_available -= msg.start_cnt;
-            memmove(curr_write.ptr+ptr_offset, curr_write.ptr+msg.start_cnt, bytes_available-msg.start_cnt);
-            DEBUG_PRINTF("  ");
-            print_byte_array(curr_write.ptr+ptr_offset, msg.end-msg.start+msg.start_cnt);
+            if (msg.start_cnt>0) {
+                DEBUG_PRINTF("  Start byte offset: %u\n",msg.start_cnt);
+                // DEBUG_PRINTF("  ");
+                // print_byte_array(curr_write.ptr+ptr_offset, msg.end-msg.start+msg.start_cnt);
+                DEBUG_PRINTF("  discarding %i bytes\n", msg.start_cnt);
+                new_bytes_available -= msg.start_cnt;
+                memmove(start_byte, start_byte+msg.start_cnt, msg_bytes_available-msg.start_cnt);
+                // DEBUG_PRINTF("  ");
+                // print_byte_array(curr_write.ptr+ptr_offset, msg.end-msg.start+msg.start_cnt);
 
-            for (int i=0;i<msg.start_cnt;i++) {
-                curr_write.ptr[(int)bytes_available+i] = 0;
+                for (int i=0;i<msg.start_cnt;i++) {
+                    start_byte[(int)msg_bytes_available+i] = 0;
+                }
             }
-        }
+        } // if msg.start != NULL
+        bool break_loop = false;
+        switch (msg.valid_message) {
+            case ParseError::MsgValid: 
+                {
+                    DEBUG_PRINTLN("  Valid Message!");
+                    // uint8_t len = msg.end-(msg.start-msg.start_cnt);
+                    uint8_t len = msg.len-msg.start_cnt;
+                    ptr_offset += len;
+                    new_bytes_available -= len;
+                    ACK(next_seq);
+                    incoming_fifo.advanceWriteCursorN(len);
+                    incoming_fifo.finalizeMessage();
+                    next_seq = 0x10 | ((next_seq+1) & 0x0f);
+                    // DEBUG_PRINTF("  ");
+                    // print_byte_array(curr_write.ptr+ptr_offset, len);
+                    break;
+                }
+            case ParseError::NotEnoughBytes: 
+            case ParseError::MsgIncomplete: 
+                {
+                    DEBUG_PRINTF("search idx at return: %d\n",msg.start_cnt);
+                    DEBUG_PRINTLN("  not enough data, need to get more and try again");
+                    incoming_fifo.advanceWriteCursorN(new_bytes_available);
+                    new_bytes_available-=new_bytes_available;
+                    break_loop = true;
+                    break;
+                }
+            case ParseError::WrongSequence: 
+                {
+                    DEBUG_PRINTLN("  Got valid message, but wrong sequence byte, NACK");
+                    DEBUG_PRINTF("    Expected %u, got %u\n", next_seq&0xf, 0);
+                    NACK(next_seq);
+                    incoming_fifo.setWriteCursorToStart();
+                    curr_write =  incoming_fifo.getWritePointer();
+                    for (int i=0;i<new_bytes_available;i++) {
+                        curr_write.ptr[i] = 0;
+                    }
+                    break_loop = true;
+                    break;
+                }
+            case -3: 
+                {
+                    DEBUG_PRINTLN("  Have data but nothing that looks like a message?!");
+                    break_loop = true;
+                                
+                }
+        } // switch (msg.valid_message)
+        if (break_loop) break;
+    } // while bytes > MIN_MESSAGE_LEN
+    incoming_fifo.advanceWriteCursorN(new_bytes_available);
+    Pointer ref = incoming_fifo.getWritePointer();
+    uint8_t *start_byte = ref.ptr;
+    DEBUG_PRINTF("Exiting rcv bytes at end: %#04x %#04x >%#04x< %#04x\n", *(start_byte-2),*(start_byte-1), *start_byte, *(start_byte+1));
 
-        if (msg.valid_message == 0) {
-            DEBUG_PRINTLN("  Valid Message!");
-            uint8_t len = msg.end-(msg.start-msg.start_cnt);
-            ptr_offset += len+1;
-            bytes_available -= len+1;
-            ACK(next_seq);
-            incoming_fifo.advanceWriteCursorN(len+1);
-            incoming_fifo.finalizeMessage();
-            next_seq = 0x10 | ((next_seq+1) & 0x0f);
-            DEBUG_PRINTF("  ");
-            print_byte_array(curr_write.ptr+ptr_offset, len);
-        } else if (msg.valid_message == -10 || msg.valid_message == -1) {
-            DEBUG_PRINTLN("  not enough data, need to get more and try again");
-            incoming_fifo.advanceWriteCursorN(bytes_available);
-            break;
-        } else  {
-            if (msg.valid_message == -2) {
-                DEBUG_PRINTLN("  Got valid message, but wrong sequence byte, NACK");
-                DEBUG_PRINTF("    Expected %u, got %u\n", next_seq, 0);
-            }
-            // can't find anything resembling a valid message, nak and try again
-            NACK(next_seq);
-            incoming_fifo.setWriteCursorToStart();
-            curr_write =  incoming_fifo.getWritePointer();
-            for (int i=0;i<bytes_available;i++) {
-                curr_write.ptr[i] = 0;
-            }
-            break;
-        }
-    }
-}
+} // void recieve_serial
 
 
 void KlipperCommander::parse_message() {
@@ -135,12 +181,12 @@ void KlipperCommander::parse_message() {
         DEBUG_PRINTF("sequence low bytes: %u\n", sequence & 0b00001111 );
 
         int16_t command_bytes_available = read_ptr.len-MIN_MESSAGE_LEN;
-        int32_t bytes_consumed=0;
+        int32_t bytes_consumed=2;
         while (command_bytes_available>0) {
             DEBUG_PRINTF("Command bytes available: %u\n", command_bytes_available);
-            VarInt cmd_id_var = parse_vlq_int(read_ptr.ptr+2+bytes_consumed, command_bytes_available);
+            VarInt cmd_id_var = parse_vlq_int(read_ptr.ptr+bytes_consumed, command_bytes_available);
             DEBUG_PRINTF("Command ID:  %u\n", cmd_id_var.value);
-            bytes_consumed = command_dispatcher(cmd_id_var.value, sequence, read_ptr.ptr+2+bytes_consumed, command_bytes_available);
+            bytes_consumed += command_dispatcher(cmd_id_var.value, sequence, read_ptr.ptr+bytes_consumed, command_bytes_available);
             if (bytes_consumed < 0) {
                 DEBUG_PRINTF("bytes_consumed is < 0: %u\n", bytes_consumed);
                 // not sure what that command was, so maybe we might be lost
@@ -220,9 +266,9 @@ int32_t KlipperCommander::command_dispatcher(uint32_t cmd_id, uint8_t sequence, 
             offset += encode_vlq_int(new_msg+offset, is_config);
             offset += encode_vlq_int(new_msg+offset, host_config_crc);
             offset += encode_vlq_int(new_msg+offset, 0); // is_shutdown
-            offset += encode_vlq_int(new_msg+offset, move_queue.getCapacity());
+            offset += encode_vlq_int(new_msg+offset, (uint16_t)move_queue.getCapacity());
             DEBUG_PRINTF("Get_config response:\n");
-            print_byte_array(new_msg, offset);
+            // print_byte_array(new_msg, offset);
             DEBUG_PRINTF("Stored Host config crc: %u\n", host_config_crc);
             DEBUG_PRINTF("********************************************************\n");
             enqueue_response(sequence, new_msg, offset);    
@@ -233,7 +279,7 @@ int32_t KlipperCommander::command_dispatcher(uint32_t cmd_id, uint8_t sequence, 
             VarInt oids = parse_vlq_int((msg+1), length-1);
             bytes_consumed += oids.length;
             num_oids = oids.value;
-            DEBUG_PRINTF("Alloccating %u oids\n", num_oids);
+            DEBUG_PRINTF("Allocating %u oids\n", num_oids);
             
         break;
         }
@@ -250,42 +296,111 @@ int32_t KlipperCommander::command_dispatcher(uint32_t cmd_id, uint8_t sequence, 
         break;
         }
         // 13-17 digital out pins
+        case 13: { //  "set_digital_out pin=%u value=%c": 13,
+            uint8_t offset=0;
+            VarInt pin_var = parse_vlq_int((msg+1), length-1);
+            offset += pin_var.length;
+            VarInt val_var = parse_vlq_int((msg+1+offset), length-1);
+            offset += val_var.length;
+            bytes_consumed+=offset;
+        
+        break;
+        }
+        case 14: { // "update_digital_out oid=%c value=%c": 14, 
+            uint8_t offset=0;
+            VarInt pin_var = parse_vlq_int((msg+1), length-1);
+            offset += pin_var.length;
+            VarInt val_var = parse_vlq_int((msg+1+offset), length-1);
+            offset += val_var.length;
+            bytes_consumed+=offset;
+        
+        break;
+        }
+        case 15: { // "queue_digital_out oid=%c clock=%u on_ticks=%u": 15,
+            uint8_t offset=0;
+            VarInt oid_var = parse_vlq_int((msg+1), length-1);
+            offset += oid_var.length;
+            VarInt clock_var = parse_vlq_int((msg+1+offset), length-(1+offset));
+            offset += clock_var.length;
+            VarInt tick_var = parse_vlq_int((msg+1+offset), length-(1+offset));
+            offset += tick_var.length;
+            bytes_consumed+=offset;
+        
+        break;
+        }
+        case 17: { // "config_digital_out oid=%c pin=%u value=%c default_value=%c max_duration=%u": 17, 
+            uint8_t offset=0;
+            VarInt oid_var = parse_vlq_int((msg+1), length-1);
+            offset += oid_var.length;
+            VarInt pin_var = parse_vlq_int((msg+1+offset), length-(1+offset));
+            offset += pin_var.length;
+            VarInt val_var = parse_vlq_int((msg+1+offset), length-(1+offset));
+            offset += val_var.length;
+            VarInt default_var = parse_vlq_int((msg+1+offset), length-(1+offset));
+            offset += default_var.length;
+            VarInt max_dur_var = parse_vlq_int((msg+1+offset), length-(1+offset));
+            offset += max_dur_var.length;
+            bytes_consumed+=offset;
+        
+        break;
+        }
         case 18: { // stepper_stop_on_trigger oid=%c, trsync_oid=%c
 
         break;
         }
         case 19: { //stepper_get_position oid=%c
-
+            uint8_t new_msg[64];
+            VarInt oid_var = parse_vlq_int((msg+1), length-1);
+            bytes_consumed+=oid_var.length;
+            // float pos = *move_queue.position_var;
+            uint8_t resp_id = 84;
+            uint8_t offset = encode_vlq_int(new_msg, resp_id);
+            // TODO - Use the specific motor oid
+            offset += encode_vlq_int(new_msg+offset, 0);
+            // TODO - Get the accumulated motor position
+            offset += encode_vlq_int(new_msg+offset, 0);
+            enqueue_response(sequence, new_msg, offset);    
+            
         break;
         }
         case 20: { // reset_step_clock oid=%c clock=%u
+            uint8_t offset=0;
             VarInt oid_var = parse_vlq_int((msg+1), length-1);
-            VarInt clock_var = parse_vlq_int((msg+1), length-1+oid_var.length);
+            offset += oid_var.length;
+            VarInt clock_var = parse_vlq_int((msg+offset), length-1+oid_var.length);
             move_queue.previous_time = clock_var.value;
             bytes_consumed+=oid_var.length + clock_var.length;
             
         break;
         }
         case 21: { // set_next_step_dir oid=%c dir=%c
+            uint8_t offset=0;
             VarInt oid_var = parse_vlq_int((msg+1), length-1);
-            VarInt dir_var = parse_vlq_int((msg+1), length-1+oid_var.length);
+            offset += oid_var.length;
+            VarInt dir_var = parse_vlq_int((msg+1+offset), length-(1+offset));
+            offset += dir_var.length;
             move_queue.host_dir = (int8_t) dir_var.value;
-            bytes_consumed+=oid_var.length + dir_var.length;
+            bytes_consumed+=offset;
+            DEBUG_PRINTF("Setting dir to: %d\n", move_queue.host_dir);
         break;
         }
         case 22: { // queue_step oid=%c interval=%u count=%hu add=%hi
             uint8_t offset=0;
             VarInt oid_var = parse_vlq_int((msg+1), length-1);
             offset += oid_var.length;
-            VarInt interval_var = parse_vlq_int((msg+1), length-1+offset);
+            // DEBUG_PRINTF("q step offset: %u - curr byte: %u - next byte: %u\n", offset,msg[1], msg[1+offset]);
+            VarInt interval_var = parse_vlq_int((msg+1+offset), length-(1+offset));
             offset += interval_var.length;
-            VarInt count_var = parse_vlq_int((msg+1), length-1+offset);
+            VarInt count_var = parse_vlq_int((msg+1+offset), length-(1+offset));
             offset += count_var.length;
-            VarInt add_var = parse_vlq_int((msg+1), length-1+offset);
-            
+            VarInt add_var = parse_vlq_int((msg+1+offset), length-(1+offset));
+            offset += add_var.length;
+            DEBUG_PRINTF("Move queued: oid: %u - interval: %u - count: %u - add: %d\n", oid_var.value, interval_var.value, count_var.value, (int32_t)add_var.value);
+            // print_byte_array(msg, 10);
+            // DEBUG_PRINTF("offset: %u\n",offset);
             MoveData new_move = MoveData{interval_var.value, count_var.value, (int32_t) add_var.value, move_queue.host_dir}; 
             move_queue.push(new_move);
-            bytes_consumed+=add_var.length+offset;
+            bytes_consumed += offset;
         break;
         }
         case 23: { // config_stepper oid=%c step_pin=%c dir_pin=%c invert_step=%c step_pulse_ticks=%ku
@@ -293,13 +408,13 @@ int32_t KlipperCommander::command_dispatcher(uint32_t cmd_id, uint8_t sequence, 
             uint8_t offset=0;
             VarInt oid_var = parse_vlq_int((msg+1), length-1);
             offset += oid_var.length;
-            VarInt step_pin_var = parse_vlq_int((msg+1), length-1+offset);
+            VarInt step_pin_var = parse_vlq_int((msg+1+offset), length-1+offset);
             offset += step_pin_var.length;
-            VarInt dir_pin_var = parse_vlq_int((msg+1), length-1+offset);
+            VarInt dir_pin_var = parse_vlq_int((msg+1+offset), length-1+offset);
             offset += dir_pin_var.length;
-            VarInt invert_step_var = parse_vlq_int((msg+1), length-1+offset);
+            VarInt invert_step_var = parse_vlq_int((msg+1+offset), length-1+offset);
             offset += invert_step_var.length;
-            VarInt step_pulse_ticks_var = parse_vlq_int((msg+1), length-1+offset);
+            VarInt step_pulse_ticks_var = parse_vlq_int((msg+1+offset), length-1+offset);
             offset += step_pulse_ticks_var.length;
             bytes_consumed+=offset;
             stepper_obj = ObjID{true, oid_var.value};
@@ -333,9 +448,9 @@ int32_t KlipperCommander::command_dispatcher(uint32_t cmd_id, uint8_t sequence, 
             uint8_t offset = 0;
             VarInt oid_var = parse_vlq_int((msg+1), length-1);
             offset += oid_var.length;
-            VarInt pin_var = parse_vlq_int((msg+1), length-1+offset);
+            VarInt pin_var = parse_vlq_int((msg+1+offset), length-1+offset);
             offset += pin_var.length;
-            VarInt pull_up_var = parse_vlq_int((msg+1), length-1+offset);
+            VarInt pull_up_var = parse_vlq_int((msg+1+offset), length-1+offset);
             offset += pull_up_var.length;
             bytes_consumed += offset;
             DEBUG_PRINTF("Allocating endstop with oid: %u, pin: %u, pull_up: %u\n",oid_var.value, pin_var.value, pull_up_var.value);
@@ -351,7 +466,7 @@ int32_t KlipperCommander::command_dispatcher(uint32_t cmd_id, uint8_t sequence, 
             uint8_t offset=0;
             VarInt oid_var = parse_vlq_int((msg+1), length-1);
             offset += oid_var.length;
-            VarInt reason_var = parse_vlq_int((msg+1), length-1+offset);
+            VarInt reason_var = parse_vlq_int((msg+1+offset), length-1+offset);
             offset += reason_var.length;
             bytes_consumed += offset;
             for (int i=0;i<MAX_TRSYNCS;i++) {
@@ -425,6 +540,9 @@ int32_t KlipperCommander::command_dispatcher(uint32_t cmd_id, uint8_t sequence, 
             break;
         }
         default:{
+            DEBUG_PRINTF("&&&&&&&&&&&&&&&&&&&&&&\n");
+            DEBUG_PRINTF("WARNING COMMAND NOT FOUND\n");
+            DEBUG_PRINTF("&&&&&&&&&&&&&&&&&&&&&&\n");
             bytes_consumed = -1;
             break;
         }
@@ -435,12 +553,12 @@ int32_t KlipperCommander::command_dispatcher(uint32_t cmd_id, uint8_t sequence, 
 void KlipperCommander::send_serial(){
     uint8_t msgs_to_send = outgoing_fifo.getNumMsgToRead();
     if (msgs_to_send > 0) {
-        DEBUG_PRINTF("\nStarting serial send to host: %u messages\n", msgs_to_send);
+        // DEBUG_PRINTF("\nStarting serial send to host: %u messages\n", msgs_to_send);
     }
     for (int i=0; i<msgs_to_send; i++){
         Pointer read_ptr = outgoing_fifo.getReadPointer();
-        DEBUG_PRINTF("msg sent: ");
-        print_byte_array(read_ptr.ptr, read_ptr.len);
+        // DEBUG_PRINTF("msg sent: ");
+        // print_byte_array(read_ptr.ptr, read_ptr.len);
         serial.write(read_ptr.ptr, read_ptr.len);
         outgoing_fifo.advanceReadCursor();
     }

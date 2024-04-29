@@ -114,6 +114,7 @@ class KlipperCommander {
 		uint32_t stats_loop_count;
 		uint32_t stats_sum;
 		uint32_t stats_sumsq;
+        uint32_t prev_bytes_remaining = 0;
 
         uint8_t next_seq = 0x10 | 0x01;
 		// uint8_t output_buffer[SEND_QUEUE_LEN][64];
