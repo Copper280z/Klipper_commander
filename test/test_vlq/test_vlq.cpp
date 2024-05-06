@@ -19,11 +19,11 @@ void tearDown(void) {
 void test_encode_decode() {
     char errmsg[256]; 
     
-    int32_t nums_to_test[12] = {500002,5006,502, 100, 5, 1, 0, -1, -5000, -500, -100};
+    int32_t nums_to_test[12] = {50002,5006,502, 100, 5, 1, 0, -1, -5000, -500, -100};
 
     for (int i=0; i<sizeof(nums_to_test); i++) {
         
-        uint8_t buf[4];
+        uint8_t buf[5];
 
         uint32_t val;
 
@@ -34,8 +34,9 @@ void test_encode_decode() {
         }
 
         uint8_t n_bytes = encode_vlq_int(buf, val);
-
-        VarInt out = parse_vlq_int(buf, 4);
+        TEST_ASSERT_LESS_OR_EQUAL(5,n_bytes);
+        VarInt out = parse_vlq_int(buf, n_bytes);
+        TEST_ASSERT_EQUAL(n_bytes, out.length);
         snprintf(errmsg, sizeof(errmsg), "Original value: %i, val into encoder: %u, value out of decoder: %u", nums_to_test[i], val, out.value);
         TEST_ASSERT_EQUAL_MESSAGE(val, out.value, errmsg);
 

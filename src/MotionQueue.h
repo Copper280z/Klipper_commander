@@ -4,7 +4,7 @@
 #include "Arduino.h"
 #include "trsync.h"
 
-#define MOVE_QUEUE_LEN 128
+#define MOVE_QUEUE_LEN 512
 
 // #define DEBUG 0
 // #define DEBUG_PRINTF if (DEBUG) Serial.printf
@@ -41,8 +41,16 @@ class MotionQueue {
         void update();
         
         int8_t push(MoveData new_move);
-        uint8_t getCapacity();
-        uint8_t getSize();
+        uint16_t getCapacity();
+        uint16_t getSize();
+
+        float getPosition();
+        float getVelocity();
+        float getAccel();
+
+        float position = 0;
+        float velocity = 0;
+        float accel = 0;
 
         float *position_var = NULL;
         float *velocity_var = NULL;
@@ -51,24 +59,25 @@ class MotionQueue {
         TrSync *trsync = NULL;
 
         unsigned long (*clock)(void);
-        uint32_t previous_time;
+        uint32_t previous_time=0;
 
         MoveData current_move;
-        float position_coeff;
-        float velocity_coeff;
-        float acceleration_coeff;
+        float position_coeff = 32.0f/(200.0f*16.0f);
+        float velocity_coeff = 1e6f*32.0f/(200.0f*16.0f);
+        float acceleration_coeff = 1e6f*32.0f/(200.0f*16.0f);
         int8_t host_dir = 1;
 
         uint8_t endstop_state = 0;
         uint8_t homing = 0;
+        int64_t step_count = 0;
 
     private:
 
         MoveData pop();
-        MoveData *head;
-        MoveData *tail;
-        uint8_t queue_size;
-        uint8_t queue_capacity = MOVE_QUEUE_LEN;
+        size_t head = 0;
+        size_t tail = 0;
+        uint16_t queue_size=0;
+        uint16_t queue_capacity = MOVE_QUEUE_LEN;
         MoveData move_array[MOVE_QUEUE_LEN];
 };
 

@@ -15,7 +15,7 @@ byte_string = ""
 for b in compressed:
     byte_string+=f"{hex(b)}, "
 
-decl_string = f"#define CONFIG_DICT_LENGTH {len(compressed)}\n#define CONFIG_DICT uint8_t config[CONFIG_DICT_LENGTH] = {{{byte_string.strip(', ')}}};\n\n"
+decl_string = f"#define CONFIG_DICT_LENGTH {len(compressed)}\n#define CONFIG_DICT const uint8_t config[CONFIG_DICT_LENGTH] = {{{byte_string.strip(', ')}}};\n\n"
 
 header = \
 '''\

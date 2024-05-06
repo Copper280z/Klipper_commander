@@ -11,8 +11,8 @@
 #define MAX_MESSAGE_LEN 64
 #endif
 
-#define FIFO_LENGTH 4096 // 64*64 for now, probably needs to be much less in real world usage
-#define MAX_N_MSGS 128 // most messages are much shorter than the 64 byte max
+#define FIFO_LENGTH 256 // 64*64 for now, probably needs to be much less in real world usage
+#define MAX_N_MSGS 6 // most messages are much shorter than the 64 byte max
 
 struct Pointer {
     uint8_t* ptr;

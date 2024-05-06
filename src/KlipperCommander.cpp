@@ -26,7 +26,7 @@ void KlipperCommander::handle() {
 
     uint32_t current_time = micros();
 
-    if (!!host_config_crc) {
+    if (is_config) {
         update_stats(current_time);
         move_queue.update();
     }
@@ -58,6 +58,9 @@ void KlipperCommander::recieve_serial() {
     // If we have previously unused bytes and recieve some more.
     //  - Put new bytes into the buffer after the previously recieved bytes
     //  - Start message search/validation at first unused byte, not at the start of new bytes
+    if (serial.available()) {
+        DEBUG_PRINTLN("New Bytes!");
+    }
     while (serial.available())
     {
         uint8_t b = serial.read();
@@ -69,15 +72,16 @@ void KlipperCommander::recieve_serial() {
             case ParseError::MsgValid: 
                 {
                     DEBUG_PRINTLN("  Valid Message!");
-                    ACK(next_seq);
+                    next_seq = 0x10 | ((next_seq+1) & 0x0f);
+                    ACKNACK(next_seq);
 
                     parse_message(msg);
                     
                     // byte after this message to the top of the buffer
                     size_t bytes_left = in_buf_idx-msg.len;
-                    memmove(in_buf, msg.end, bytes_left);
+                    memmove(in_buf, msg.end+1, bytes_left);
                     in_buf_idx = bytes_left;
-                    next_seq = 0x10 | ((next_seq+1) & 0x0f);
+                    
                     break;
                 }
             case ParseError::NotEnoughBytes: 
@@ -90,9 +94,23 @@ void KlipperCommander::recieve_serial() {
             case ParseError::WrongSequence: 
                 {
                     DEBUG_PRINTLN("  Got valid message, but wrong sequence byte, NACK");
-                    DEBUG_PRINTF("    Expected %u, got %u\n", next_seq&0xf, 0);
-                    NACK(next_seq);
+                    DEBUG_PRINTF("    Expected %u, got %u\n", next_seq&0xf, msg.start[1]&0xf);
+                    // seq is same as last seq, already handled that so drop it and try again
+                    // if (msg.start[1]&0xf == (next_seq&0xf-1)) {
+                    //     size_t bytes_left = in_buf_idx-msg.len;
+                    //     memmove(in_buf, msg.end, bytes_left);
+                    //     in_buf_idx = bytes_left;
+                    //     break;
+                    // }
+                    ACKNACK(next_seq);
+                    // next_seq = 0x10 | ((next_seq-1) & 0x0f);
                     in_buf_idx = 0;
+                    for (size_t i=0; i<(sizeof(in_buf)/sizeof(in_buf[0])); i++) {
+                        in_buf[i]=0;
+                    }
+                     while (serial.available()) {
+                        serial.read();
+                     }
                     break;
                 }
             case -3: 
@@ -123,37 +141,48 @@ void KlipperCommander::parse_message(msg_location_t msg) {
         DEBUG_PRINT("\n");
 
         uint8_t sequence = msg.start[1];
-        DEBUG_PRINTF("sequence low bytes: %u\n", sequence & 0b00001111 );
+        DEBUG_PRINTF("sequence low bytes: %u\n", sequence & 0xf );
 
         int16_t command_bytes_available = msg.len-MIN_MESSAGE_LEN;
-        int32_t bytes_consumed=2;
-        while (command_bytes_available>0) {
+        int32_t bytes_consumed=0;
+        while ((command_bytes_available - bytes_consumed)>0) {
             DEBUG_PRINTF("Command bytes available: %u\n", command_bytes_available);
-            VarInt cmd_id_var = parse_vlq_int(&msg.start[bytes_consumed], command_bytes_available);
+            VarInt cmd_id_var = parse_vlq_int(&msg.start[bytes_consumed+MSG_HEADER_LEN], command_bytes_available);
+            bytes_consumed += cmd_id_var.length;
             DEBUG_PRINTF("Command ID:  %u\n", cmd_id_var.value);
-            bytes_consumed += command_dispatcher(cmd_id_var.value, sequence, &msg.start[bytes_consumed], command_bytes_available);
-            if (bytes_consumed < 0) {
+            bytes_consumed += command_dispatcher(cmd_id_var.value, sequence, &msg.start[bytes_consumed+MSG_HEADER_LEN], command_bytes_available-bytes_consumed);
+            DEBUG_PRINTF("Bytes left in msg after cmd: %d\n", command_bytes_available-bytes_consumed); 
+
+            if (bytes_consumed <= 0) {
                 DEBUG_PRINTF("bytes_consumed is < 0: %u\n", bytes_consumed);
                 // not sure what that command was, so maybe we might be lost
                 // quit and try again next time
                 // if this leg is ever taken, something is wrong, probably related to the data dict
                 break;
             }
-            command_bytes_available -= bytes_consumed;
+        }
+        if ((command_bytes_available - bytes_consumed)>0) {
+            DEBUG_PRINTF("&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&\n");
+            DEBUG_PRINTF("WARNING LOSING BYTES IN VALID MESSAGE\n");
+            DEBUG_PRINTF("&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&\n");
+            while (1) {
+                // Serial.send_now();
+                delay(1000);
+            };
         }
 
 }
 
-int32_t KlipperCommander::command_dispatcher(uint32_t cmd_id, uint8_t sequence, uint8_t *msg, uint8_t length) {
-    uint8_t bytes_consumed = 1;
+int32_t KlipperCommander::command_dispatcher(uint32_t cmd_id, uint8_t sequence, uint8_t *msg, int16_t length) {
+    uint8_t bytes_consumed = 0;
     switch (cmd_id) {
         case 1:{
-            VarInt offset_var = parse_vlq_int((msg+1), length-1);
-            VarInt amount_var = parse_vlq_int((msg+1+offset_var.length), length-1-offset_var.length);
+            VarInt offset_var = parse_vlq_int((msg), length);
+            VarInt amount_var = parse_vlq_int((msg+offset_var.length), length-offset_var.length);
             DEBUG_PRINTF("Offset: %u - len: %u\n", (int32_t) offset_var.value, offset_var.length);
             DEBUG_PRINTF("Amount: %u - len: %u\n", amount_var.value, amount_var.length);
             send_config(sequence, offset_var.value, amount_var.value);
-            bytes_consumed = 1+offset_var.length+amount_var.length;
+            bytes_consumed = offset_var.length+amount_var.length;
             break;
         }
         case 4:{ //Uptime
@@ -168,18 +197,20 @@ int32_t KlipperCommander::command_dispatcher(uint32_t cmd_id, uint8_t sequence, 
             enqueue_response(sequence, new_msg, offset);
             break;
         }
-        case 5: { //get_clock
+        case 5: { // get_clock
             current_time = micros();
             uint8_t new_msg[64];
             uint8_t resp_id = 80;
             uint8_t offset = encode_vlq_int(new_msg, resp_id);
             offset+= encode_vlq_int(new_msg+offset, current_time);
-            enqueue_response(sequence, new_msg, offset);     
+            enqueue_response(sequence, new_msg, offset);   
+            DEBUG_PRINTF("sum_total_steps: %d\n",sum_total_steps);
+
             break;
         }
-        case 6: { // finalize config
+        case 6: { // finalize_config crc=%u
             DEBUG_PRINTF("********************************************************\n");
-            VarInt config_crc_var = parse_vlq_int((msg+1), length-1);
+            VarInt config_crc_var = parse_vlq_int((msg), length);
             host_config_crc = config_crc_var.value;
             DEBUG_PRINTF("finalize_config crc: %u\n", host_config_crc);
             DEBUG_PRINTF("********************************************************\n");
@@ -203,7 +234,7 @@ int32_t KlipperCommander::command_dispatcher(uint32_t cmd_id, uint8_t sequence, 
             break;
         }
         case 8: { // allocate_oids count=%c
-            VarInt oids = parse_vlq_int((msg+1), length-1);
+            VarInt oids = parse_vlq_int((msg), length);
             bytes_consumed += oids.length;
             num_oids = oids.value;
             DEBUG_PRINTF("Allocating %u oids\n", num_oids);
@@ -225,9 +256,9 @@ int32_t KlipperCommander::command_dispatcher(uint32_t cmd_id, uint8_t sequence, 
         // 13-17 digital out pins
         case 13: { //  "set_digital_out pin=%u value=%c": 13,
             uint8_t offset=0;
-            VarInt pin_var = parse_vlq_int((msg+1), length-1);
+            VarInt pin_var = parse_vlq_int((msg), length);
             offset += pin_var.length;
-            VarInt val_var = parse_vlq_int((msg+1+offset), length-1);
+            VarInt val_var = parse_vlq_int((msg+offset), length);
             offset += val_var.length;
             bytes_consumed+=offset;
         
@@ -235,9 +266,9 @@ int32_t KlipperCommander::command_dispatcher(uint32_t cmd_id, uint8_t sequence, 
         }
         case 14: { // "update_digital_out oid=%c value=%c": 14, 
             uint8_t offset=0;
-            VarInt pin_var = parse_vlq_int((msg+1), length-1);
+            VarInt pin_var = parse_vlq_int((msg), length);
             offset += pin_var.length;
-            VarInt val_var = parse_vlq_int((msg+1+offset), length-1);
+            VarInt val_var = parse_vlq_int((msg+offset), length);
             offset += val_var.length;
             bytes_consumed+=offset;
         
@@ -245,11 +276,11 @@ int32_t KlipperCommander::command_dispatcher(uint32_t cmd_id, uint8_t sequence, 
         }
         case 15: { // "queue_digital_out oid=%c clock=%u on_ticks=%u": 15,
             uint8_t offset=0;
-            VarInt oid_var = parse_vlq_int((msg+1), length-1);
+            VarInt oid_var = parse_vlq_int((msg), length);
             offset += oid_var.length;
-            VarInt clock_var = parse_vlq_int((msg+1+offset), length-(1+offset));
+            VarInt clock_var = parse_vlq_int((msg+offset), length-offset);
             offset += clock_var.length;
-            VarInt tick_var = parse_vlq_int((msg+1+offset), length-(1+offset));
+            VarInt tick_var = parse_vlq_int((msg+offset), length-offset);
             offset += tick_var.length;
             bytes_consumed+=offset;
         
@@ -257,15 +288,15 @@ int32_t KlipperCommander::command_dispatcher(uint32_t cmd_id, uint8_t sequence, 
         }
         case 17: { // "config_digital_out oid=%c pin=%u value=%c default_value=%c max_duration=%u": 17, 
             uint8_t offset=0;
-            VarInt oid_var = parse_vlq_int((msg+1), length-1);
+            VarInt oid_var = parse_vlq_int((msg), length);
             offset += oid_var.length;
-            VarInt pin_var = parse_vlq_int((msg+1+offset), length-(1+offset));
+            VarInt pin_var = parse_vlq_int((msg+offset), length-offset);
             offset += pin_var.length;
-            VarInt val_var = parse_vlq_int((msg+1+offset), length-(1+offset));
+            VarInt val_var = parse_vlq_int((msg+offset), length-offset);
             offset += val_var.length;
-            VarInt default_var = parse_vlq_int((msg+1+offset), length-(1+offset));
+            VarInt default_var = parse_vlq_int((msg+offset), length-offset);
             offset += default_var.length;
-            VarInt max_dur_var = parse_vlq_int((msg+1+offset), length-(1+offset));
+            VarInt max_dur_var = parse_vlq_int((msg+offset), length-offset);
             offset += max_dur_var.length;
             bytes_consumed+=offset;
         
@@ -277,7 +308,7 @@ int32_t KlipperCommander::command_dispatcher(uint32_t cmd_id, uint8_t sequence, 
         }
         case 19: { //stepper_get_position oid=%c
             uint8_t new_msg[64];
-            VarInt oid_var = parse_vlq_int((msg+1), length-1);
+            VarInt oid_var = parse_vlq_int((msg), length);
             bytes_consumed+=oid_var.length;
             // float pos = *move_queue.position_var;
             uint8_t resp_id = 84;
@@ -292,9 +323,9 @@ int32_t KlipperCommander::command_dispatcher(uint32_t cmd_id, uint8_t sequence, 
         }
         case 20: { // reset_step_clock oid=%c clock=%u
             uint8_t offset=0;
-            VarInt oid_var = parse_vlq_int((msg+1), length-1);
+            VarInt oid_var = parse_vlq_int((msg), length);
             offset += oid_var.length;
-            VarInt clock_var = parse_vlq_int((msg+offset), length-1+oid_var.length);
+            VarInt clock_var = parse_vlq_int((msg+offset), length-oid_var.length);
             move_queue.previous_time = clock_var.value;
             bytes_consumed+=oid_var.length + clock_var.length;
             
@@ -302,43 +333,57 @@ int32_t KlipperCommander::command_dispatcher(uint32_t cmd_id, uint8_t sequence, 
         }
         case 21: { // set_next_step_dir oid=%c dir=%c
             uint8_t offset=0;
-            VarInt oid_var = parse_vlq_int((msg+1), length-1);
+            VarInt oid_var = parse_vlq_int((msg), length);
             offset += oid_var.length;
-            VarInt dir_var = parse_vlq_int((msg+1+offset), length-(1+offset));
+            VarInt dir_var = parse_vlq_int((msg+offset), length-offset);
             offset += dir_var.length;
-            move_queue.host_dir = (int8_t) dir_var.value;
+            if ((uint8_t) dir_var.value==1){
+                move_queue.host_dir = 1;
+            } else {
+                move_queue.host_dir = -1;
+            }
             bytes_consumed+=offset;
             DEBUG_PRINTF("Setting dir to: %d\n", move_queue.host_dir);
         break;
         }
         case 22: { // queue_step oid=%c interval=%u count=%hu add=%hi
-            uint8_t offset=0;
-            VarInt oid_var = parse_vlq_int((msg+1), length-1);
+
+            int8_t offset=0;
+            VarInt oid_var = parse_vlq_int((msg), length);
             offset += oid_var.length;
             // DEBUG_PRINTF("q step offset: %u - curr byte: %u - next byte: %u\n", offset,msg[1], msg[1+offset]);
-            VarInt interval_var = parse_vlq_int((msg+1+offset), length-(1+offset));
+            VarInt interval_var = parse_vlq_int((msg+offset), length-offset);
             offset += interval_var.length;
-            VarInt count_var = parse_vlq_int((msg+1+offset), length-(1+offset));
+            VarInt count_var = parse_vlq_int((msg+offset), length-offset);
             offset += count_var.length;
-            VarInt add_var = parse_vlq_int((msg+1+offset), length-(1+offset));
+            VarInt add_var = parse_vlq_int((msg+offset), length-offset);
             offset += add_var.length;
-            DEBUG_PRINTF("Move queued: oid: %u - interval: %u - count: %u - add: %d\n", oid_var.value, interval_var.value, count_var.value, (int32_t)add_var.value);
-            MoveData new_move = MoveData{interval_var.value, count_var.value, (int32_t) add_var.value, move_queue.host_dir}; 
+            DEBUG_PRINTF("Move queued: oid: %u - interval: %u - count: %u - add: %d\n", oid_var.value, interval_var.value, (uint16_t) count_var.value, (int16_t)add_var.value);
+            
+
+            MoveData new_move = MoveData{}; 
+            new_move.interval = interval_var.value;
+            new_move.count = (uint16_t) count_var.value;
+            new_move.add = (int16_t) add_var.value;
+            new_move.dir = move_queue.host_dir;
+
             move_queue.push(new_move);
             bytes_consumed += offset;
+            sum_total_steps += move_queue.host_dir * (uint16_t) count_var.value;
+
         break;
         }
         case 23: { // config_stepper oid=%c step_pin=%c dir_pin=%c invert_step=%c step_pulse_ticks=%ku
             uint8_t offset=0;
-            VarInt oid_var = parse_vlq_int((msg+1), length-1);
+            VarInt oid_var = parse_vlq_int((msg), length);
             offset += oid_var.length;
-            VarInt step_pin_var = parse_vlq_int((msg+1+offset), length-1+offset);
+            VarInt step_pin_var = parse_vlq_int((msg+offset), length+offset);
             offset += step_pin_var.length;
-            VarInt dir_pin_var = parse_vlq_int((msg+1+offset), length-1+offset);
+            VarInt dir_pin_var = parse_vlq_int((msg+offset), length+offset);
             offset += dir_pin_var.length;
-            VarInt invert_step_var = parse_vlq_int((msg+1+offset), length-1+offset);
+            VarInt invert_step_var = parse_vlq_int((msg+offset), length+offset);
             offset += invert_step_var.length;
-            VarInt step_pulse_ticks_var = parse_vlq_int((msg+1+offset), length-1+offset);
+            VarInt step_pulse_ticks_var = parse_vlq_int((msg+offset), length+offset);
             offset += step_pulse_ticks_var.length;
             bytes_consumed+=offset;
             stepper_obj = ObjID{true, oid_var.value};
@@ -352,7 +397,7 @@ int32_t KlipperCommander::command_dispatcher(uint32_t cmd_id, uint8_t sequence, 
             uint8_t new_msg[64];
             uint8_t resp_id = 85;
 
-            VarInt oid_var = parse_vlq_int((msg+1), length-1);
+            VarInt oid_var = parse_vlq_int((msg), length);
             uint8_t endstop_state = move_queue.endstop_state;
 
             uint8_t offset = encode_vlq_int(new_msg, resp_id);
@@ -370,11 +415,11 @@ int32_t KlipperCommander::command_dispatcher(uint32_t cmd_id, uint8_t sequence, 
         }
         case 26: { // config_endstop oid=%c pin=%c pull_up=%c
             uint8_t offset = 0;
-            VarInt oid_var = parse_vlq_int((msg+1), length-1);
+            VarInt oid_var = parse_vlq_int((msg), length);
             offset += oid_var.length;
-            VarInt pin_var = parse_vlq_int((msg+1+offset), length-1+offset);
+            VarInt pin_var = parse_vlq_int((msg+offset), length+offset);
             offset += pin_var.length;
-            VarInt pull_up_var = parse_vlq_int((msg+1+offset), length-1+offset);
+            VarInt pull_up_var = parse_vlq_int((msg+offset), length+offset);
             offset += pull_up_var.length;
             bytes_consumed += offset;
             DEBUG_PRINTF("Allocating endstop with oid: %u, pin: %u, pull_up: %u\n",oid_var.value, pin_var.value, pull_up_var.value);
@@ -388,9 +433,9 @@ int32_t KlipperCommander::command_dispatcher(uint32_t cmd_id, uint8_t sequence, 
         // REASON_PAST_END_TIME = 4
         case 27: { // trsync_trigger oid=%c reason=%c
             uint8_t offset=0;
-            VarInt oid_var = parse_vlq_int((msg+1), length-1);
+            VarInt oid_var = parse_vlq_int((msg), length);
             offset += oid_var.length;
-            VarInt reason_var = parse_vlq_int((msg+1+offset), length-1+offset);
+            VarInt reason_var = parse_vlq_int((msg+offset), length+offset);
             offset += reason_var.length;
             bytes_consumed += offset;
             for (int i=0;i<MAX_TRSYNCS;i++) {
@@ -407,9 +452,9 @@ int32_t KlipperCommander::command_dispatcher(uint32_t cmd_id, uint8_t sequence, 
         }
         case 28: { // trsync_set_timeout oid=%c clock=%u
             uint8_t offset=0;
-            VarInt oid_var = parse_vlq_int((msg+1), length-1);
+            VarInt oid_var = parse_vlq_int((msg), length);
             offset += oid_var.length;
-            VarInt expire_clock_var = parse_vlq_int((msg+1), length-1+offset);
+            VarInt expire_clock_var = parse_vlq_int((msg), length+offset);
             offset += expire_clock_var.length;
             bytes_consumed += offset;
             for (int i=0;i<MAX_TRSYNCS;i++) {
@@ -424,13 +469,13 @@ int32_t KlipperCommander::command_dispatcher(uint32_t cmd_id, uint8_t sequence, 
         }
         case 29: { // trsync_start oid=%c report_clock=%u report_ticks=%u expire_reason=%c
             uint8_t offset=0;
-            VarInt oid_var = parse_vlq_int((msg+1), length-1);
+            VarInt oid_var = parse_vlq_int((msg), length);
             offset += oid_var.length;
-            VarInt report_clock_var = parse_vlq_int((msg+1), length-1+offset);
+            VarInt report_clock_var = parse_vlq_int((msg), length+offset);
             offset += report_clock_var.length;
-            VarInt report_ticks_var = parse_vlq_int((msg+1), length-1+offset);
+            VarInt report_ticks_var = parse_vlq_int((msg), length+offset);
             offset += report_ticks_var.length;
-            VarInt expire_reason_var = parse_vlq_int((msg+1), length-1+offset);
+            VarInt expire_reason_var = parse_vlq_int((msg), length+offset);
             offset += report_ticks_var.length;
             bytes_consumed += offset;
             for (int i=0;i<MAX_TRSYNCS;i++) {
@@ -445,7 +490,7 @@ int32_t KlipperCommander::command_dispatcher(uint32_t cmd_id, uint8_t sequence, 
         break;
         }
         case 30: { // config_trsync oid=%c
-            VarInt oid_var = parse_vlq_int((msg+1), length-1);
+            VarInt oid_var = parse_vlq_int((msg), length);
             DEBUG_PRINTF("Allocating trsync with oid: %u\n",oid_var.value);
             for (int i=0;i<MAX_TRSYNCS;i++) {
                 if (!trsync_objs[i].allocated) {
@@ -467,6 +512,10 @@ int32_t KlipperCommander::command_dispatcher(uint32_t cmd_id, uint8_t sequence, 
             DEBUG_PRINTF("&&&&&&&&&&&&&&&&&&&&&&\n");
             DEBUG_PRINTF("WARNING COMMAND NOT FOUND\n");
             DEBUG_PRINTF("&&&&&&&&&&&&&&&&&&&&&&\n");
+            while (1) {
+                // Serial.send_now();
+                delay(1000);
+            };
             bytes_consumed = -1;
             break;
         }
@@ -483,20 +532,68 @@ void KlipperCommander::send_serial(){
         Pointer read_ptr = outgoing_fifo.getReadPointer();
         // DEBUG_PRINTF("msg sent: ");
         // print_byte_array(read_ptr.ptr, read_ptr.len);
+        // for (int i=0;i<read_ptr.len;i++){
+            // serial.write(read_ptr.ptr[i]);
+        // }
         serial.write(read_ptr.ptr, read_ptr.len);
+        serial.flush();
         outgoing_fifo.advanceReadCursor();
     }
 
 }
 
-void KlipperCommander::ACK(uint8_t sequence) {
+// void KlipperCommander::ACK(uint8_t sequence) {
+//     Pointer write_ptr = outgoing_fifo.getWritePointer();
+//     uint8_t new_sequence = ((sequence +1 ) & 0b00001111) | 0x10;
+//     // DEBUG_PRINTF("ACK sequence high bytes: 0x%x\n", new_sequence & 0b11110000 );
+//     // DEBUG_PRINTF("ACK sequence low bytes: %u\n", new_sequence & 0b00001111 );
+
+//     write_ptr.ptr[0] = 5;
+//     write_ptr.ptr[1] = new_sequence;
+//     uint16_t crc = crc16(write_ptr.ptr,2);
+//     write_ptr.ptr[2] = (uint8_t) (crc >> 8);
+//     write_ptr.ptr[3] = (uint8_t) (crc & 0xFF);
+//     write_ptr.ptr[4] = SYNC_BYTE;
+    
+//     outgoing_fifo.advanceWriteCursorN(5);
+//     outgoing_fifo.finalizeMessage();
+
+// }
+
+// void KlipperCommander::ACK(uint8_t sequence) {
+//     static uint8_t msg_arr[5];
+//     uint8_t new_sequence = ((sequence +1 ) & 0xf) | 0x10;
+
+//     msg_arr[0] = 5;
+//     msg_arr[1] = new_sequence;
+//     uint16_t crc = crc16(msg_arr,2);
+//     msg_arr[2] = (uint8_t) (crc >> 8);
+//     msg_arr[3] = (uint8_t) (crc & 0xFF);
+//     msg_arr[4] = SYNC_BYTE;
+//     serial.write(msg_arr,5);
+//     serial.flush();
+// }
+
+// void KlipperCommander::NACK(uint8_t sequence) {
+//     Pointer write_ptr = outgoing_fifo.getWritePointer();
+//     uint8_t new_sequence = ((sequence -1 ) & 0b00001111) | 0x10;
+
+//     write_ptr.ptr[0] = 5;
+//     write_ptr.ptr[1] = new_sequence;
+//     uint16_t crc = crc16(write_ptr.ptr,2);
+//     write_ptr.ptr[2] = (uint8_t) (crc >> 8);
+//     write_ptr.ptr[3] = (uint8_t) (crc & 0xFF);
+//     write_ptr.ptr[4] = SYNC_BYTE;
+    
+//     outgoing_fifo.advanceWriteCursorN(5);
+//     outgoing_fifo.finalizeMessage();
+// }
+
+void KlipperCommander::ACKNACK(uint8_t sequence) {
     Pointer write_ptr = outgoing_fifo.getWritePointer();
-    uint8_t new_sequence = ((sequence +1 ) & 0b00001111) | 0x10;
-    // DEBUG_PRINTF("ACK sequence high bytes: 0x%x\n", new_sequence & 0b11110000 );
-    // DEBUG_PRINTF("ACK sequence low bytes: %u\n", new_sequence & 0b00001111 );
 
     write_ptr.ptr[0] = 5;
-    write_ptr.ptr[1] = new_sequence;
+    write_ptr.ptr[1] = sequence;
     uint16_t crc = crc16(write_ptr.ptr,2);
     write_ptr.ptr[2] = (uint8_t) (crc >> 8);
     write_ptr.ptr[3] = (uint8_t) (crc & 0xFF);
@@ -504,23 +601,21 @@ void KlipperCommander::ACK(uint8_t sequence) {
     
     outgoing_fifo.advanceWriteCursorN(5);
     outgoing_fifo.finalizeMessage();
-
 }
 
-void KlipperCommander::NACK(uint8_t sequence) {
-    Pointer write_ptr = outgoing_fifo.getWritePointer();
-    uint8_t new_sequence = ((sequence -1 ) & 0b00001111) | 0x10;
+// void KlipperCommander::NACK(uint8_t sequence) {
+//     static uint8_t msg_arr[5];
+//     uint8_t new_sequence = ((sequence-1) & 0xf) | 0x10;
 
-    write_ptr.ptr[0] = 5;
-    write_ptr.ptr[1] = new_sequence;
-    uint16_t crc = crc16(write_ptr.ptr,2);
-    write_ptr.ptr[2] = (uint8_t) (crc >> 8);
-    write_ptr.ptr[3] = (uint8_t) (crc & 0xFF);
-    write_ptr.ptr[4] = SYNC_BYTE;
-    
-    outgoing_fifo.advanceWriteCursorN(5);
-    outgoing_fifo.finalizeMessage();
-}
+//     msg_arr[0] = 5;
+//     msg_arr[1] = new_sequence;
+//     uint16_t crc = crc16(msg_arr,2);
+//     msg_arr[2] = (uint8_t) (crc >> 8);
+//     msg_arr[3] = (uint8_t) (crc & 0xFF);
+//     msg_arr[4] = SYNC_BYTE;
+//     serial.write(msg_arr,5);
+//     serial.flush();
+// }
 
 uint16_t KlipperCommander::crc16(uint8_t* arr, uint8_t length) {
     uint16_t crc = 0xFFFF;
@@ -531,29 +626,6 @@ uint16_t KlipperCommander::crc16(uint8_t* arr, uint8_t length) {
     }
     return crc;
 }
-
-// VarInt KlipperCommander::parse_vlq_int(uint8_t* bytes, uint8_t length) {
-//     uint32_t c = *(bytes);
-//     uint32_t v = 0;//c & 0x7F;
-
-//     //if vlq is negative(?)
-//     if ((c & 0x60) == 0x60) {
-//         v |= (uint32_t) ((int32_t) -0x20);
-//     }
-//     uint8_t j=0;
-//     for (int i=0; i<length; i++) {
-//         c = *(bytes+i);
-//         v = (v << 7) | (c & 0x7F);
-//         j+=1;
-
-//         if ((c & 0x80) != 0x80){
-//             break;
-//         }
-
-//     }
-//     VarInt var = VarInt{v,j};
-//     return var;
-// }
 
 uint16_t KlipperCommander::parse_crc(uint8_t* msg, uint8_t length) {
     uint16_t crc = (uint16_t) *(msg+length-3) << 8 | (uint16_t) *(msg+length-2);
@@ -573,12 +645,12 @@ void KlipperCommander::send_config(uint8_t sequence, uint32_t offset, uint32_t a
     }
 }
 
-void KlipperCommander::enqueue_response(uint8_t sequence, uint8_t* msg, uint8_t length) {
+void KlipperCommander::enqueue_response(uint8_t sequence, const uint8_t* msg, uint8_t length) {
     Pointer write_ptr = outgoing_fifo.getWritePointer();
 
     uint8_t send_cmd_len = 5+length;
 
-    uint8_t new_sequence = ((sequence + 1 ) & 0b00001111) | 0x10;
+    uint8_t new_sequence = ((sequence + 1 ) & 0xf) | 0x10;
     latest_outgoing_sequence = new_sequence;
 
     write_ptr.ptr[0] = send_cmd_len;
@@ -595,9 +667,31 @@ void KlipperCommander::enqueue_response(uint8_t sequence, uint8_t* msg, uint8_t 
     outgoing_fifo.finalizeMessage();
 }
 
-void KlipperCommander::enqueue_config_response(uint8_t sequence, uint32_t offset, uint8_t* msg, uint8_t count) {
+// void KlipperCommander::enqueue_response(uint8_t sequence, const uint8_t* msg, uint8_t length) {
+//     uint8_t msg_arr[64];
+
+//     uint8_t send_cmd_len = 5+length;
+
+//     uint8_t new_sequence = ((sequence + 1 ) & 0b00001111) | 0x10;
+//     latest_outgoing_sequence = new_sequence;
+
+//     msg_arr[0] = send_cmd_len;
+//     msg_arr[1] = new_sequence;
+//     for (int i=0;i<length;i++) {
+//         msg_arr[i+2] = msg[i];
+//     }
+//     uint16_t crc = crc16(msg_arr,send_cmd_len-3);
+//     msg_arr[2+length] = (uint8_t) (crc >> 8);
+//     msg_arr[3+length] = (uint8_t) (crc & 0xFF);
+//     msg_arr[4+length] = SYNC_BYTE;
+
+//     serial.write(msg_arr,send_cmd_len);
+//     serial.flush();
+// }
+
+void KlipperCommander::enqueue_config_response(uint8_t sequence, uint32_t offset, const uint8_t* msg, uint8_t count) {
     Pointer write_ptr = outgoing_fifo.getWritePointer();
-    uint8_t new_sequence = ((sequence +1 ) & 0b00001111) | 0x10;
+    uint8_t new_sequence = ((sequence +1 ) & 0xf) | 0x10;
     uint8_t offset_bytes = encode_vlq_int(&write_ptr.ptr[3], offset);
     uint8_t count_bytes = encode_vlq_int(&write_ptr.ptr[3+offset_bytes], count);
     uint8_t vlq_bytes = offset_bytes+count_bytes;
@@ -623,6 +717,35 @@ void KlipperCommander::enqueue_config_response(uint8_t sequence, uint32_t offset
     outgoing_fifo.advanceWriteCursorN(send_cmd_len);
     outgoing_fifo.finalizeMessage();
 }
+
+// void KlipperCommander::enqueue_config_response(uint8_t sequence, uint32_t offset, const uint8_t* msg, uint8_t count) {
+//     uint8_t msg_arr[64];
+//     uint8_t new_sequence = ((sequence +1 ) & 0b00001111) | 0x10;
+//     uint8_t offset_bytes = encode_vlq_int(&msg_arr[3], offset);
+//     uint8_t count_bytes = encode_vlq_int(&msg_arr[3+offset_bytes], count);
+//     uint8_t vlq_bytes = offset_bytes+count_bytes;
+//     uint8_t send_cmd_len = 6+count+vlq_bytes;
+
+//     msg_arr[0] = send_cmd_len;
+//     msg_arr[1] = new_sequence;
+//     msg_arr[2] = 0; // command id - "identify_response"
+    
+//     for (int i=0;i<count;i++) {
+//         msg_arr[i+3+vlq_bytes] = *(msg+i);
+//     }
+
+//     uint16_t crc = crc16(msg_arr,send_cmd_len-3);
+//     msg_arr[3+vlq_bytes+count] = (uint8_t) (crc >> 8);
+//     msg_arr[4+vlq_bytes+count] = (uint8_t) (crc & 0xFF);
+//     msg_arr[5+vlq_bytes+count] = SYNC_BYTE;
+
+//     DEBUG_PRINTF("command length: %u - 0x%x\n", send_cmd_len,send_cmd_len);
+//     DEBUG_PRINTF("Parsed crc: 0x%x\n", parse_crc(msg_arr,send_cmd_len));
+//     DEBUG_PRINTF("Calc'd crc: 0x%x\n", crc);
+
+//     serial.write(msg_arr,send_cmd_len);
+//     serial.flush();
+// }
 
 void print_byte_array(uint8_t* arr, uint8_t len){
     for (int i=0; i<len;i++){

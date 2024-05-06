@@ -27,6 +27,7 @@
 #define SEND_QUEUE_LEN 64
 #define MAX_MESSAGE_LEN 64
 #define MIN_MESSAGE_LEN 5
+#define MSG_HEADER_LEN 2
 #define MESSAGE_DATA_LEN (MAX_MESSAGE_LEN-MIN_MESSAGE_LEN)
 #define SUMSQ_BASE 256
 #define SYNC_BYTE 0x7e
@@ -82,6 +83,7 @@ class KlipperCommander {
         // ObjID endstop_obj;
         uint8_t is_config = 0; 
         uint8_t num_oids = 0;
+		int32_t sum_total_steps = 0;
 	private:
 		#ifdef USE_TINYUSB
 			Adafruit_USBD_CDC &serial;
@@ -94,12 +96,13 @@ class KlipperCommander {
 		FIFO outgoing_fifo;
 		uint8_t latest_outgoing_sequence;
 
-		void enqueue_response(uint8_t sequence, uint8_t* msg, uint8_t length);
-		void enqueue_config_response(uint8_t sequence, uint32_t offset, uint8_t* msg, uint8_t length);
-		void ACK(uint8_t sequence);
-		void NACK(uint8_t sequence);
+		void enqueue_response(uint8_t sequence, const uint8_t* msg, uint8_t length);
+		void enqueue_config_response(uint8_t sequence, uint32_t offset, const uint8_t* msg, uint8_t length);
+		// void ACK(uint8_t sequence);
+		// void NACK(uint8_t sequence);
+		void ACKNACK(uint8_t sequence);
 
-		int32_t command_dispatcher(uint32_t cmd_id,uint8_t sequence, uint8_t *msg, uint8_t length);
+		int32_t command_dispatcher(uint32_t cmd_id,uint8_t sequence, uint8_t *msg, int16_t length);
 
 		uint16_t crc16(uint8_t *arr, uint8_t length);
 
