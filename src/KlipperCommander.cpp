@@ -59,10 +59,14 @@ void KlipperCommander::recieve_serial() {
     //  - Put new bytes into the buffer after the previously recieved bytes
     //  - Start message search/validation at first unused byte, not at the start of new bytes
     if (serial.available()) {
-        DEBUG_PRINTLN("New Bytes!");
+        // DEBUG_PRINTLN("New Bytes!");
     }
     while (serial.available())
     {
+        #ifdef LA_DEBUG
+        digitalToggle(PB1);
+        #endif
+        // delayMicroseconds(2);
         uint8_t b = serial.read();
         
         in_buf[in_buf_idx++] = b;
@@ -81,19 +85,24 @@ void KlipperCommander::recieve_serial() {
                     size_t bytes_left = in_buf_idx-msg.len;
                     memmove(in_buf, msg.end+1, bytes_left);
                     in_buf_idx = bytes_left;
-                    
+                    // memset(&in_buf[in_buf_idx],0,256-in_buf_idx)
+                    DEBUG_PRINTF("  Moved %u bytes after\n", bytes_left);
                     break;
                 }
             case ParseError::NotEnoughBytes: 
+                    // DEBUG_PRINTF("  Not Enough Bytes!\n");
+                    break;
             case ParseError::MsgIncomplete: 
-                {
+                {   
+                    // size_t ser_bytes = serial.available();
+                    // size_t bytes_needed = 
                     // DEBUG_PRINTF("search idx at return: %d\n",msg.start_cnt);
-                    // DEBUG_PRINTLN("  not enough data, need to get more and try again");
+                    // DEBUG_PRINTF("  Msg Incomplete len: %u have: %u \n", msg.start[0],in_buf_idx-msg.start_cnt);
                     break;
                 }
             case ParseError::WrongSequence: 
                 {
-                    DEBUG_PRINTLN("  Got valid message, but wrong sequence byte, NACK");
+                    DEBUG_PRINTF("    Got valid message, but wrong sequence byte, NACK with %u\n", next_seq&0xf);
                     DEBUG_PRINTF("    Expected %u, got %u\n", next_seq&0xf, msg.start[1]&0xf);
                     // seq is same as last seq, already handled that so drop it and try again
                     // if (msg.start[1]&0xf == (next_seq&0xf-1)) {
@@ -111,7 +120,11 @@ void KlipperCommander::recieve_serial() {
                      while (serial.available()) {
                         serial.read();
                      }
-                    break;
+                    #ifdef LA_DEBUG
+                    digitalToggle(PB1);
+                    #endif
+                    return;
+                    
                 }
             case -3: 
                 {
@@ -124,56 +137,65 @@ void KlipperCommander::recieve_serial() {
             in_buf_idx = 0;
         }
     } // while serial.available
-
+    #ifdef LA_DEBUG
+    digitalToggle(PB1);
+    #endif
     return;
 }
 
 
 void KlipperCommander::parse_message(msg_location_t msg) {
+    digitalWrite(PB3,HIGH);
 
+    // DEBUG_PRINTF("Length of command being parsed: %d\n", msg.len);
 
-        DEBUG_PRINTF("Length of command being parsed: %d\n", msg.len);
+    // for (int i=0; i<msg.len;i++){
+    //     DEBUG_PRINT(msg.start[i], HEX);
+    //     DEBUG_PRINT(" ");
+    // }
+    // DEBUG_PRINT("\n");
 
-        for (int i=0; i<msg.len;i++){
-            DEBUG_PRINT(msg.start[i], HEX);
-            DEBUG_PRINT(" ");
+    uint8_t sequence = msg.start[1];
+    // DEBUG_PRINTF("sequence low bytes: %u\n", sequence & 0xf );
+
+    int16_t command_bytes_available = msg.len-MIN_MESSAGE_LEN;
+    int32_t bytes_consumed=0;
+    while ((command_bytes_available - bytes_consumed)>0) {
+        // DEBUG_PRINTF("Command bytes available: %u\n", command_bytes_available);
+        VarInt cmd_id_var = parse_vlq_int(&msg.start[bytes_consumed+MSG_HEADER_LEN], command_bytes_available);
+        bytes_consumed += cmd_id_var.length;
+        // DEBUG_PRINTF("Command ID:  %u\n", cmd_id_var.value);
+        bytes_consumed += command_dispatcher(cmd_id_var.value, sequence, &msg.start[bytes_consumed+MSG_HEADER_LEN], command_bytes_available-bytes_consumed);
+        // DEBUG_PRINTF("Bytes left in msg after cmd: %d\n", command_bytes_available-bytes_consumed); 
+
+        if (bytes_consumed <= 0) {
+            DEBUG_PRINTF("bytes_consumed is < 0: %u\n", bytes_consumed);
+            // not sure what that command was, so maybe we might be lost
+            // quit and try again next time
+            // if this leg is ever taken, something is wrong, probably related to the data dict
+            break;
         }
-        DEBUG_PRINT("\n");
-
-        uint8_t sequence = msg.start[1];
-        DEBUG_PRINTF("sequence low bytes: %u\n", sequence & 0xf );
-
-        int16_t command_bytes_available = msg.len-MIN_MESSAGE_LEN;
-        int32_t bytes_consumed=0;
-        while ((command_bytes_available - bytes_consumed)>0) {
-            DEBUG_PRINTF("Command bytes available: %u\n", command_bytes_available);
-            VarInt cmd_id_var = parse_vlq_int(&msg.start[bytes_consumed+MSG_HEADER_LEN], command_bytes_available);
-            bytes_consumed += cmd_id_var.length;
-            DEBUG_PRINTF("Command ID:  %u\n", cmd_id_var.value);
-            bytes_consumed += command_dispatcher(cmd_id_var.value, sequence, &msg.start[bytes_consumed+MSG_HEADER_LEN], command_bytes_available-bytes_consumed);
-            DEBUG_PRINTF("Bytes left in msg after cmd: %d\n", command_bytes_available-bytes_consumed); 
-
-            if (bytes_consumed <= 0) {
-                DEBUG_PRINTF("bytes_consumed is < 0: %u\n", bytes_consumed);
-                // not sure what that command was, so maybe we might be lost
-                // quit and try again next time
-                // if this leg is ever taken, something is wrong, probably related to the data dict
-                break;
-            }
-        }
-        if ((command_bytes_available - bytes_consumed)>0) {
-            DEBUG_PRINTF("&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&\n");
-            DEBUG_PRINTF("WARNING LOSING BYTES IN VALID MESSAGE\n");
-            DEBUG_PRINTF("&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&\n");
-            while (1) {
-                // Serial.send_now();
-                delay(1000);
-            };
-        }
+    }
+    if ((command_bytes_available - bytes_consumed)>0) {
+        DEBUG_PRINTF("&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&\n");
+        DEBUG_PRINTF("WARNING LOSING BYTES IN VALID MESSAGE\n");
+        DEBUG_PRINTF("&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&\n");
+        while (1) {
+            // Serial.send_now();
+            delay(1000);
+        };
+    }
+    digitalWrite(PB3,LOW);
 
 }
 
 int32_t KlipperCommander::command_dispatcher(uint32_t cmd_id, uint8_t sequence, uint8_t *msg, int16_t length) {
+    #ifdef LA_DEBUG
+    digitalToggle(PB3);
+    digitalToggle(PB3);
+    digitalToggle(PB3);
+    digitalToggle(PB3);
+    #endif
     uint8_t bytes_consumed = 0;
     switch (cmd_id) {
         case 1:{
@@ -347,7 +369,7 @@ int32_t KlipperCommander::command_dispatcher(uint32_t cmd_id, uint8_t sequence, 
         break;
         }
         case 22: { // queue_step oid=%c interval=%u count=%hu add=%hi
-
+            digitalToggle(PB3);
             int8_t offset=0;
             VarInt oid_var = parse_vlq_int((msg), length);
             offset += oid_var.length;
@@ -358,8 +380,11 @@ int32_t KlipperCommander::command_dispatcher(uint32_t cmd_id, uint8_t sequence, 
             offset += count_var.length;
             VarInt add_var = parse_vlq_int((msg+offset), length-offset);
             offset += add_var.length;
-            DEBUG_PRINTF("Move queued: oid: %u - interval: %u - count: %u - add: %d\n", oid_var.value, interval_var.value, (uint16_t) count_var.value, (int16_t)add_var.value);
-            
+            // DEBUG_PRINTF("Move queued: oid: %u - interval: %u - count: %u - add: %d\n", oid_var.value, interval_var.value, (uint16_t) count_var.value, (int16_t)add_var.value);
+            #ifdef LA_DEBUG
+            digitalToggle(PB3);
+            digitalToggle(PB3);
+            #endif
 
             MoveData new_move = MoveData{}; 
             new_move.interval = interval_var.value;
@@ -370,6 +395,7 @@ int32_t KlipperCommander::command_dispatcher(uint32_t cmd_id, uint8_t sequence, 
             move_queue.push(new_move);
             bytes_consumed += offset;
             sum_total_steps += move_queue.host_dir * (uint16_t) count_var.value;
+            digitalToggle(PB3);
 
         break;
         }
@@ -589,18 +615,31 @@ void KlipperCommander::send_serial(){
 //     outgoing_fifo.finalizeMessage();
 // }
 
-void KlipperCommander::ACKNACK(uint8_t sequence) {
-    Pointer write_ptr = outgoing_fifo.getWritePointer();
+// void KlipperCommander::ACKNACK(uint8_t sequence) {
+//     Pointer write_ptr = outgoing_fifo.getWritePointer();
 
-    write_ptr.ptr[0] = 5;
-    write_ptr.ptr[1] = sequence;
-    uint16_t crc = crc16(write_ptr.ptr,2);
-    write_ptr.ptr[2] = (uint8_t) (crc >> 8);
-    write_ptr.ptr[3] = (uint8_t) (crc & 0xFF);
-    write_ptr.ptr[4] = SYNC_BYTE;
+//     write_ptr.ptr[0] = 5;
+//     write_ptr.ptr[1] = sequence;
+//     uint16_t crc = crc16(write_ptr.ptr,2);
+//     write_ptr.ptr[2] = (uint8_t) (crc >> 8);
+//     write_ptr.ptr[3] = (uint8_t) (crc & 0xFF);
+//     write_ptr.ptr[4] = SYNC_BYTE;
     
-    outgoing_fifo.advanceWriteCursorN(5);
-    outgoing_fifo.finalizeMessage();
+//     outgoing_fifo.advanceWriteCursorN(5);
+//     outgoing_fifo.finalizeMessage();
+// }
+
+void KlipperCommander::ACKNACK(uint8_t sequence) {
+    uint8_t msg_arr[5];
+
+    msg_arr[0] = 5;
+    msg_arr[1] = sequence;
+    uint16_t crc = crc16(msg_arr,2);
+    msg_arr[2] = (uint8_t) (crc >> 8);
+    msg_arr[3] = (uint8_t) (crc & 0xFF);
+    msg_arr[4] = SYNC_BYTE;
+    serial.write(msg_arr,5);
+    serial.flush();
 }
 
 // void KlipperCommander::NACK(uint8_t sequence) {
@@ -645,107 +684,107 @@ void KlipperCommander::send_config(uint8_t sequence, uint32_t offset, uint32_t a
     }
 }
 
-void KlipperCommander::enqueue_response(uint8_t sequence, const uint8_t* msg, uint8_t length) {
-    Pointer write_ptr = outgoing_fifo.getWritePointer();
-
-    uint8_t send_cmd_len = 5+length;
-
-    uint8_t new_sequence = ((sequence + 1 ) & 0xf) | 0x10;
-    latest_outgoing_sequence = new_sequence;
-
-    write_ptr.ptr[0] = send_cmd_len;
-    write_ptr.ptr[1] = new_sequence;
-    for (int i=0;i<length;i++) {
-        write_ptr.ptr[i+2] = msg[i];
-    }
-    uint16_t crc = crc16(write_ptr.ptr,send_cmd_len-3);
-    write_ptr.ptr[2+length] = (uint8_t) (crc >> 8);
-    write_ptr.ptr[3+length] = (uint8_t) (crc & 0xFF);
-    write_ptr.ptr[4+length] = SYNC_BYTE;
-
-    outgoing_fifo.advanceWriteCursorN(send_cmd_len);
-    outgoing_fifo.finalizeMessage();
-}
-
 // void KlipperCommander::enqueue_response(uint8_t sequence, const uint8_t* msg, uint8_t length) {
-//     uint8_t msg_arr[64];
+//     Pointer write_ptr = outgoing_fifo.getWritePointer();
 
 //     uint8_t send_cmd_len = 5+length;
 
-//     uint8_t new_sequence = ((sequence + 1 ) & 0b00001111) | 0x10;
+//     uint8_t new_sequence = ((sequence + 1 ) & 0xf) | 0x10;
 //     latest_outgoing_sequence = new_sequence;
 
-//     msg_arr[0] = send_cmd_len;
-//     msg_arr[1] = new_sequence;
+//     write_ptr.ptr[0] = send_cmd_len;
+//     write_ptr.ptr[1] = new_sequence;
 //     for (int i=0;i<length;i++) {
-//         msg_arr[i+2] = msg[i];
+//         write_ptr.ptr[i+2] = msg[i];
 //     }
-//     uint16_t crc = crc16(msg_arr,send_cmd_len-3);
-//     msg_arr[2+length] = (uint8_t) (crc >> 8);
-//     msg_arr[3+length] = (uint8_t) (crc & 0xFF);
-//     msg_arr[4+length] = SYNC_BYTE;
+//     uint16_t crc = crc16(write_ptr.ptr,send_cmd_len-3);
+//     write_ptr.ptr[2+length] = (uint8_t) (crc >> 8);
+//     write_ptr.ptr[3+length] = (uint8_t) (crc & 0xFF);
+//     write_ptr.ptr[4+length] = SYNC_BYTE;
 
-//     serial.write(msg_arr,send_cmd_len);
-//     serial.flush();
+//     outgoing_fifo.advanceWriteCursorN(send_cmd_len);
+//     outgoing_fifo.finalizeMessage();
 // }
 
-void KlipperCommander::enqueue_config_response(uint8_t sequence, uint32_t offset, const uint8_t* msg, uint8_t count) {
-    Pointer write_ptr = outgoing_fifo.getWritePointer();
-    uint8_t new_sequence = ((sequence +1 ) & 0xf) | 0x10;
-    uint8_t offset_bytes = encode_vlq_int(&write_ptr.ptr[3], offset);
-    uint8_t count_bytes = encode_vlq_int(&write_ptr.ptr[3+offset_bytes], count);
-    uint8_t vlq_bytes = offset_bytes+count_bytes;
-    uint8_t send_cmd_len = 6+count+vlq_bytes;
+void KlipperCommander::enqueue_response(uint8_t sequence, const uint8_t* msg, uint8_t length) {
+    uint8_t msg_arr[64];
 
-    write_ptr.ptr[0] = send_cmd_len;
-    write_ptr.ptr[1] = new_sequence;
-    write_ptr.ptr[2] = 0; // command id - "identify_response"
-    
-    for (int i=0;i<count;i++) {
-        write_ptr.ptr[i+3+vlq_bytes] = *(msg+i);
+    uint8_t send_cmd_len = 5+length;
+
+    uint8_t new_sequence = ((sequence + 1 ) & 0b00001111) | 0x10;
+    latest_outgoing_sequence = new_sequence;
+
+    msg_arr[0] = send_cmd_len;
+    msg_arr[1] = new_sequence;
+    for (int i=0;i<length;i++) {
+        msg_arr[i+2] = msg[i];
     }
+    uint16_t crc = crc16(msg_arr,send_cmd_len-3);
+    msg_arr[2+length] = (uint8_t) (crc >> 8);
+    msg_arr[3+length] = (uint8_t) (crc & 0xFF);
+    msg_arr[4+length] = SYNC_BYTE;
 
-    uint16_t crc = crc16(write_ptr.ptr,send_cmd_len-3);
-    write_ptr.ptr[3+vlq_bytes+count] = (uint8_t) (crc >> 8);
-    write_ptr.ptr[4+vlq_bytes+count] = (uint8_t) (crc & 0xFF);
-    write_ptr.ptr[5+vlq_bytes+count] = SYNC_BYTE;
-
-    DEBUG_PRINTF("command length: %u - 0x%x\n", send_cmd_len,send_cmd_len);
-    DEBUG_PRINTF("Parsed crc: 0x%x\n", parse_crc(write_ptr.ptr,send_cmd_len));
-    DEBUG_PRINTF("Calc'd crc: 0x%x\n", crc);
-
-    outgoing_fifo.advanceWriteCursorN(send_cmd_len);
-    outgoing_fifo.finalizeMessage();
+    serial.write(msg_arr,send_cmd_len);
+    serial.flush();
 }
 
 // void KlipperCommander::enqueue_config_response(uint8_t sequence, uint32_t offset, const uint8_t* msg, uint8_t count) {
-//     uint8_t msg_arr[64];
-//     uint8_t new_sequence = ((sequence +1 ) & 0b00001111) | 0x10;
-//     uint8_t offset_bytes = encode_vlq_int(&msg_arr[3], offset);
-//     uint8_t count_bytes = encode_vlq_int(&msg_arr[3+offset_bytes], count);
+//     Pointer write_ptr = outgoing_fifo.getWritePointer();
+//     uint8_t new_sequence = ((sequence +1 ) & 0xf) | 0x10;
+//     uint8_t offset_bytes = encode_vlq_int(&write_ptr.ptr[3], offset);
+//     uint8_t count_bytes = encode_vlq_int(&write_ptr.ptr[3+offset_bytes], count);
 //     uint8_t vlq_bytes = offset_bytes+count_bytes;
 //     uint8_t send_cmd_len = 6+count+vlq_bytes;
 
-//     msg_arr[0] = send_cmd_len;
-//     msg_arr[1] = new_sequence;
-//     msg_arr[2] = 0; // command id - "identify_response"
+//     write_ptr.ptr[0] = send_cmd_len;
+//     write_ptr.ptr[1] = new_sequence;
+//     write_ptr.ptr[2] = 0; // command id - "identify_response"
     
 //     for (int i=0;i<count;i++) {
-//         msg_arr[i+3+vlq_bytes] = *(msg+i);
+//         write_ptr.ptr[i+3+vlq_bytes] = *(msg+i);
 //     }
 
-//     uint16_t crc = crc16(msg_arr,send_cmd_len-3);
-//     msg_arr[3+vlq_bytes+count] = (uint8_t) (crc >> 8);
-//     msg_arr[4+vlq_bytes+count] = (uint8_t) (crc & 0xFF);
-//     msg_arr[5+vlq_bytes+count] = SYNC_BYTE;
+//     uint16_t crc = crc16(write_ptr.ptr,send_cmd_len-3);
+//     write_ptr.ptr[3+vlq_bytes+count] = (uint8_t) (crc >> 8);
+//     write_ptr.ptr[4+vlq_bytes+count] = (uint8_t) (crc & 0xFF);
+//     write_ptr.ptr[5+vlq_bytes+count] = SYNC_BYTE;
 
 //     DEBUG_PRINTF("command length: %u - 0x%x\n", send_cmd_len,send_cmd_len);
-//     DEBUG_PRINTF("Parsed crc: 0x%x\n", parse_crc(msg_arr,send_cmd_len));
+//     DEBUG_PRINTF("Parsed crc: 0x%x\n", parse_crc(write_ptr.ptr,send_cmd_len));
 //     DEBUG_PRINTF("Calc'd crc: 0x%x\n", crc);
 
-//     serial.write(msg_arr,send_cmd_len);
-//     serial.flush();
+//     outgoing_fifo.advanceWriteCursorN(send_cmd_len);
+//     outgoing_fifo.finalizeMessage();
 // }
+
+void KlipperCommander::enqueue_config_response(uint8_t sequence, uint32_t offset, const uint8_t* msg, uint8_t count) {
+    uint8_t msg_arr[64];
+    uint8_t new_sequence = ((sequence +1 ) & 0b00001111) | 0x10;
+    uint8_t offset_bytes = encode_vlq_int(&msg_arr[3], offset);
+    uint8_t count_bytes = encode_vlq_int(&msg_arr[3+offset_bytes], count);
+    uint8_t vlq_bytes = offset_bytes+count_bytes;
+    uint8_t send_cmd_len = 6+count+vlq_bytes;
+
+    msg_arr[0] = send_cmd_len;
+    msg_arr[1] = new_sequence;
+    msg_arr[2] = 0; // command id - "identify_response"
+    
+    for (int i=0;i<count;i++) {
+        msg_arr[i+3+vlq_bytes] = *(msg+i);
+    }
+
+    uint16_t crc = crc16(msg_arr,send_cmd_len-3);
+    msg_arr[3+vlq_bytes+count] = (uint8_t) (crc >> 8);
+    msg_arr[4+vlq_bytes+count] = (uint8_t) (crc & 0xFF);
+    msg_arr[5+vlq_bytes+count] = SYNC_BYTE;
+
+    DEBUG_PRINTF("command length: %u - 0x%x\n", send_cmd_len,send_cmd_len);
+    DEBUG_PRINTF("Parsed crc: 0x%x\n", parse_crc(msg_arr,send_cmd_len));
+    DEBUG_PRINTF("Calc'd crc: 0x%x\n", crc);
+
+    serial.write(msg_arr,send_cmd_len);
+    serial.flush();
+}
 
 void print_byte_array(uint8_t* arr, uint8_t len){
     for (int i=0; i<len;i++){

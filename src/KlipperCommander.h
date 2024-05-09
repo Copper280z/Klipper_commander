@@ -15,7 +15,7 @@
 #include <Adafruit_TinyUSB.h>
 #endif
 
-#define DEBUG_P 1
+#define DEBUG_P 0
 #define DEBUG_PRINTF if (DEBUG_P) Serial.printf
 #define DEBUG_PRINT if (DEBUG_P) Serial.print
 #define DEBUG_PRINTLN if (DEBUG_P) Serial.println

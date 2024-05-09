@@ -12,6 +12,11 @@ msg_location_t find_message(uint8_t *array, uint8_t len, uint8_t next_seq) {
     }
 
     for (int i = 0; i<len; i++) {
+        #ifdef LA_DEBUG
+        digitalToggle(PB2);
+        // delayMicroseconds(2);
+        digitalToggle(PB2);
+        #endif
         start_b = array[i];
 
         // illegal start byte, msg length can't be greater than 64 or less than 5
@@ -23,6 +28,8 @@ msg_location_t find_message(uint8_t *array, uint8_t len, uint8_t next_seq) {
         if ((start_b+i) > len) {
             retval.valid_message = ParseError::MsgIncomplete;
             retval.start_cnt = i;
+            retval.start = &array[i];
+
             return retval;
         }
         

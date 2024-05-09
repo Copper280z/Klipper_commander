@@ -6,9 +6,9 @@
 #include "stdint.h"
 
 
-// HardwareSerial Serial2 = HardwareSerial(USART2);
+HardwareSerial Serial2 = HardwareSerial(USART2);
 
-KlipperCommander k_commander = KlipperCommander(Serial1);
+KlipperCommander k_commander = KlipperCommander(Serial2);
 
 bool led_state;
 uint32_t led_timer;
@@ -16,10 +16,14 @@ uint32_t print_timer;
 
 void setup() {
   pinMode(LED_BUILTIN, OUTPUT);
+  pinMode(PB0, OUTPUT);
+  pinMode(PB1, OUTPUT);
+  pinMode(PB2, OUTPUT);
+  pinMode(PB3, OUTPUT);
   Serial.begin(250000);
-  // Serial2.setTx(PA2);
-  // Serial2.setRx(PA3);
-  Serial1.begin(250000);
+  Serial2.setTx(PA2);
+  Serial2.setRx(PA3);
+  Serial2.begin(250000);
 
   digitalWrite(LED_BUILTIN, LOW);
   led_state = false;
@@ -37,7 +41,9 @@ void setup() {
 }
 
 void loop() {
-    delayMicroseconds(15);
+    digitalWrite(PB0, HIGH);
+    // delayMicroseconds(2);
+
     k_commander.handle();
     
     if (micros() - led_timer > (uint32_t) 1e6) {
@@ -55,6 +61,7 @@ void loop() {
       // Serial.printf("pos: %.3f - vel: %.3f - accel: %.3f\n",pos,velocity,accel);
       print_timer = micros();
     }
+    digitalWrite(PB0, LOW);
 }
 
 #endif
@@ -88,8 +95,9 @@ uint8_t useDFU = 0;
 #undef LED_BUILTIN
 #define LED_BUILTIN USER_LED
 #endif
+HardwareSerial Serial2 = HardwareSerial(USART2);
 
-KlipperCommander k_commander = KlipperCommander(Serial);
+KlipperCommander k_commander = KlipperCommander(Serial2);
 
 // simpleFOC constructors
 BLDCDriver3PWM driver = BLDCDriver3PWM(U_PWM, V_PWM, W_PWM, U_EN, V_EN, W_EN);
@@ -97,7 +105,9 @@ BLDCMotor motor = BLDCMotor(POLEPAIRS, RPHASE, MOTORKV);
 MagneticSensorMT6701SSI enc = MagneticSensorMT6701SSI(ENC_CS);
 // SmoothingSensor enc = SmoothingSensor(encoder, motor);
 // Commander commander = Commander(Serial);
-
+bool led_state;
+uint32_t led_timer;
+uint32_t print_timer;
 
 uint8_t configureFOC(void);
 uint8_t configureCAN(void);
@@ -114,8 +124,10 @@ void setup()
 		jump_to_bootloader();
 	}
   // pinMode(LED_BUILTIN, OUTPUT);
-  Serial.begin(2000000);
-  // Serial1.begin(250000);
+  Serial.begin(250000);
+  Serial2.setTx(PA2);
+  Serial2.setRx(PA3);
+  Serial2.begin(250000);  // Serial1.begin(250000);
 
   digitalWrite(USER_LED, LOW);
 
