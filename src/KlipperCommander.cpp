@@ -2,29 +2,37 @@
 #include "parse.h"
 #include <cstdint>
 
+static inline uint32_t default_clock(){
+	return micros();
+}
 
-#ifdef USE_TINYUSB
-    KlipperCommander::KlipperCommander(Adafruit_USBD_CDC &Serial) : serial(Serial) {
-        serial = Serial;
+// #ifdef USE_TINYUSB
+    // KlipperCommander::KlipperCommander(Adafruit_USBD_CDC &Serial) : serial(Serial) {
+    //     serial = Serial;
+    // }
+// #else
+KlipperCommander::KlipperCommander(Stream &Serial) : serial(Serial) {
+    serial = Serial; 
+    clock = default_clock;
+    loop_start_time = clock();
+    move_queue = MotionQueue(clock);
+
+    for (size_t i=0;i<sizeof(in_buf);i++){
+        in_buf[i]=0;
     }
-#else
-    KlipperCommander::KlipperCommander(Stream &Serial) : serial(Serial) {
-        serial = Serial; 
-        loop_start_time = micros();
-        move_queue = MotionQueue();
-
-        for (size_t i=0;i<sizeof(in_buf);i++){
-            in_buf[i]=0;
-        }
+    for (size_t i=0; i<MAX_TRSYNCS; i++){
+        endstop_objs[i] = EndStop();
 
     }
-#endif
+
+}
+// #endif
 
 void KlipperCommander::handle() {
     recieve_serial();
     send_serial();
 
-    uint32_t current_time = micros();
+    uint32_t current_time = clock();
 
     if (is_config) {
         update_stats(current_time);
@@ -58,15 +66,12 @@ void KlipperCommander::recieve_serial() {
     // If we have previously unused bytes and recieve some more.
     //  - Put new bytes into the buffer after the previously recieved bytes
     //  - Start message search/validation at first unused byte, not at the start of new bytes
-    if (serial.available()) {
-        // DEBUG_PRINTLN("New Bytes!");
-    }
+
     while (serial.available())
     {
         #ifdef LA_DEBUG
         digitalToggle(PB1);
         #endif
-        // delayMicroseconds(2);
         uint8_t b = serial.read();
         
         in_buf[in_buf_idx++] = b;
@@ -94,6 +99,9 @@ void KlipperCommander::recieve_serial() {
                     break;
             case ParseError::MsgIncomplete: 
                 {   
+                    // TODO - Future optimization: If we don't have enough bytes yet, we don't need to do the whole search process 
+                    //                             again, we can just wait until we have enough bytes
+
                     // size_t ser_bytes = serial.available();
                     // size_t bytes_needed = 
                     // DEBUG_PRINTF("search idx at return: %d\n",msg.start_cnt);
@@ -209,7 +217,7 @@ int32_t KlipperCommander::command_dispatcher(uint32_t cmd_id, uint8_t sequence, 
         }
         case 4:{ //Uptime
             DEBUG_PRINTLN("Serving Uptime");
-            current_time = micros();
+            current_time = clock();
 
             uint8_t new_msg[64];
             uint8_t resp_id = 79;
@@ -220,7 +228,7 @@ int32_t KlipperCommander::command_dispatcher(uint32_t cmd_id, uint8_t sequence, 
             break;
         }
         case 5: { // get_clock
-            current_time = micros();
+            current_time = clock();
             uint8_t new_msg[64];
             uint8_t resp_id = 80;
             uint8_t offset = encode_vlq_int(new_msg, resp_id);
@@ -419,12 +427,12 @@ int32_t KlipperCommander::command_dispatcher(uint32_t cmd_id, uint8_t sequence, 
         }
         // endstop state contains the precise time the pin satisfied the trigger conditions
         case 24: { // endstop_query_state oid=%c
-            uint32_t next_clock = micros();
+            uint32_t next_clock = clock();
             uint8_t new_msg[64];
             uint8_t resp_id = 85;
 
             VarInt oid_var = parse_vlq_int((msg), length);
-            uint8_t endstop_state = move_queue.endstop_state;
+            // uint8_t endstop_state = move_queue.endstop_state;
 
             uint8_t offset = encode_vlq_int(new_msg, resp_id);
             offset += encode_vlq_int(new_msg+offset, oid_var.value);            // oid
@@ -794,27 +802,6 @@ void print_byte_array(uint8_t* arr, uint8_t len){
     DEBUG_PRINT("\n");
 }
 
-// // copy+paste from klipper, rewrite without goto
-// uint8_t KlipperCommander::encode_vlq_int(uint8_t *p, uint32_t v) {
-//     int32_t sv = v;
-//     uint8_t bytes=0;
-//     if (sv < (3L<<5)  && sv >= -(1L<<5))  goto f4;
-//     if (sv < (3L<<12) && sv >= -(1L<<12)) goto f3;
-//     if (sv < (3L<<19) && sv >= -(1L<<19)) goto f2;
-//     if (sv < (3L<<26) && sv >= -(1L<<26)) goto f1;
-//     *p++ = (v>>28) | 0x80;
-//     bytes+=1;
-// f1: *p++ = ((v>>21) & 0x7f) | 0x80;
-//     bytes+=1;
-// f2: *p++ = ((v>>14) & 0x7f) | 0x80;
-//     bytes+=1;
-// f3: *p++ = ((v>>7) & 0x7f) | 0x80;
-//     bytes+=1;
-// f4: *p++ = v & 0x7f;
-//     bytes+=1;
-//     return bytes;
-// }
-
 void KlipperCommander::update_stats(uint32_t current_time) {
     uint32_t looptime = current_time - loop_start_time;
     stats_loop_count++;
@@ -835,12 +822,13 @@ void KlipperCommander::update_stats(uint32_t current_time) {
     loop_start_time = current_time;
     // send stats update every 5sec
     // if not time yet, return now
-    if (current_time < prev_stats_send+5000000) {
+    int32_t diff = int32_t(current_time) - int32_t(prev_stats_send+5000000);
+    if (diff < 0 ) {
         return;
     }
-
+    DEBUG_PRINTLN("Sending Stats Update");
     // not sure how this is ever reached, maybe when the clock rolls over?
-    if (current_time < prev_stats_send){
+    if ((int32_t)(current_time - prev_stats_send)<0) {
         prev_stats_send_high++;
     }
 
@@ -850,7 +838,7 @@ void KlipperCommander::update_stats(uint32_t current_time) {
     offset+= encode_vlq_int(msg+offset, stats_loop_count);
     offset+= encode_vlq_int(msg+offset, stats_sum);
     offset+= encode_vlq_int(msg+offset, stats_sumsq);
-    enqueue_response(latest_outgoing_sequence, msg, offset);
+    enqueue_response(latest_outgoing_sequence-1, msg, offset);
 
     prev_stats_send = current_time;
     stats_loop_count = 0;

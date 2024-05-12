@@ -54,9 +54,9 @@ void loop() {
     }
     
     if (micros() - print_timer > (uint32_t) 5e5) {
-      float pos = k_commander.move_queue.position;
-      float velocity = k_commander.move_queue.velocity;
-      float accel = k_commander.move_queue.accel;
+      // float pos = k_commander.move_queue.position;
+      // float velocity = k_commander.move_queue.velocity;
+      // float accel = k_commander.move_queue.accel;
 
       // Serial.printf("pos: %.3f - vel: %.3f - accel: %.3f\n",pos,velocity,accel);
       print_timer = micros();

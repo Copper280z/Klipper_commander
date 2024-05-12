@@ -1,19 +1,22 @@
 #include "MotionQueue.h"
 
-#define NO_MOVE_QUEUED 999999999
+// #define NO_MOVE_QUEUED 999999999
 
 MotionQueue::MotionQueue() {
     clock = micros;
-    current_move = MoveData{};
+    // current_move = MoveData{};
     current_move.interval = NO_MOVE_QUEUED;
     current_move.count = 0;
     current_move.add = 0;
     head = 0;
     tail = 0;
-    position_coeff = 32.0f/(200.0f*16.0f);
+    // position_coeff = 32.0f/(200.0f*16.0f);
 }
 
 MotionQueue::MotionQueue(unsigned long (*user_clock)(void)){
+    current_move.interval = NO_MOVE_QUEUED;
+    current_move.count = 0;
+    current_move.add = 0;
     clock = user_clock;
     head = 0;
     tail = 0;
@@ -49,7 +52,7 @@ void MotionQueue::update() {
     if (trsync != NULL) {
         if (trsync->triggered) {
             current_move = MoveData{NO_MOVE_QUEUED,0,0,0};
-            while (queue_size != 0) {
+            while (items_in_queue != 0) {
                 pop();
             }
             trsync = NULL;
@@ -70,7 +73,7 @@ void MotionQueue::update() {
         // if (print_counter>20) {
         //     // Serial.printf("Current time: %u\n", current_time);
         //     // Serial.printf("Current move interval: %u\n", current_move.interval);
-        //     // Serial.printf("Current queue size: %u out of %u\n", queue_size, queue_capacity);
+        //     // Serial.printf("Current queue size: %u out of %u\n", items_in_queue, queue_capacity);
             // Serial.printf("pos: %.3f - vel: %.3f - accel: %.3f\n",position,velocity,accel);
         //     print_counter = 0;
         // }
@@ -116,7 +119,7 @@ void MotionQueue::update() {
         // }
     }
 
-    if (current_move.count <= 0) {
+    if (current_move.count == 0) {
         current_move = pop(); 
         // if (current_move.interval != NO_MOVE_QUEUED){
         //     Serial.printf("Current move interval: %u - count: %u - add: %d - dir: %d\n", current_move.interval, current_move.count, current_move.add, current_move.dir);
@@ -125,21 +128,21 @@ void MotionQueue::update() {
         //     Serial.flush();
         // }
     }
-    if (queue_size==0){
+    if (items_in_queue==0){
         velocity=0;
         accel=0;
     }
 }
 
 int8_t MotionQueue::push(MoveData new_move) {
-    if (queue_size<MOVE_QUEUE_LEN) {
+    if (items_in_queue<MOVE_QUEUE_LEN) {
         move_array[head] = new_move;
-        if (head == (MOVE_QUEUE_LEN-1)) {
+        if (head >= (MOVE_QUEUE_LEN-1)) {
             head = 0;
         } else {
             head += 1;
         }
-        queue_size += 1;
+        items_in_queue += 1;
         return 0;
     } else {
         return -1;
@@ -147,22 +150,20 @@ int8_t MotionQueue::push(MoveData new_move) {
 }
 
 uint16_t MotionQueue::getCapacity() {
-
     return queue_capacity;
 }
 
 uint16_t MotionQueue::getSize() {
-
-    return queue_size;
+    return items_in_queue;
 }
 
 MoveData MotionQueue::pop() {
-    if (queue_size > 0) {
-        queue_size-=1;
+    if (items_in_queue > 0) {
+        items_in_queue-=1;
         
         MoveData next_move = move_array[tail];
 
-        if (tail == (MOVE_QUEUE_LEN-1)) {
+        if (tail >= (MOVE_QUEUE_LEN-1)) {
             tail = 0;
         }else {
             tail+=1;

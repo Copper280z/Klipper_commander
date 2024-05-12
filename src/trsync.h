@@ -9,11 +9,13 @@ class TrSync {
 
         bool allocated=false;
         bool triggered=false;
-        uint8_t oid;
-        uint8_t reason=1;
-        uint32_t expire_time;
-        uint32_t report_time;
-        uint8_t flags, trigger_reason, expire_reason;
+        uint8_t oid = 0;
+        uint8_t reason = 1;
+        uint32_t expire_time = 0;
+        uint32_t report_time = 0;
+        uint8_t flags = 0;
+        uint8_t trigger_reason = 0;
+        uint8_t expire_reason = 0;
         
         //callback?
 };

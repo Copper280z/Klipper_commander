@@ -1,10 +1,11 @@
 #ifndef _MOTIONQUEUE
 #define _MOTIONQUEUE
 
-#include "Arduino.h"
+#include "Arduino.h" // NOLINT
 #include "trsync.h"
 
 #define MOVE_QUEUE_LEN 512
+#define NO_MOVE_QUEUED 999999999
 
 // #define DEBUG 0
 // #define DEBUG_PRINTF if (DEBUG) Serial.printf
@@ -12,10 +13,10 @@
 // #define DEBUG_PRINTLN if (DEBUG) Serial.print
 
 struct MoveData {
-    uint32_t interval;
-    uint32_t count;
-    int32_t add;
-    int8_t dir;
+    uint32_t interval=NO_MOVE_QUEUED;
+    uint32_t count=0;
+    int32_t add=0;
+    int8_t dir=0;
 };
 
 
@@ -26,7 +27,7 @@ class MotionQueue {
         // MotionQueue(float *position);
         // MotionQueue(float *position, float *velocity);
         // MotionQueue(float *position, float *velocity, float *acceleration);
-        MotionQueue(unsigned long (*clock)(void));
+        explicit MotionQueue(unsigned long (*clock)(void));
         // MotionQueue(unsigned long (*clock)(void), float *position);
         // MotionQueue(unsigned long (*clock)(void), float *position, float *velocity);
         // MotionQueue(unsigned long (*clock)(void), float *position, float *velocity, float *acceleration);
@@ -61,7 +62,7 @@ class MotionQueue {
         unsigned long (*clock)(void);
         uint32_t previous_time=0;
 
-        MoveData current_move;
+        MoveData current_move = MoveData();
         float position_coeff = 32.0f/(200.0f*16.0f);
         float velocity_coeff = 1e6f*32.0f/(200.0f*16.0f);
         float acceleration_coeff = 1e6f*32.0f/(200.0f*16.0f);
@@ -76,7 +77,7 @@ class MotionQueue {
         MoveData pop();
         size_t head = 0;
         size_t tail = 0;
-        uint16_t queue_size=0;
+        uint16_t items_in_queue=0;
         uint16_t queue_capacity = MOVE_QUEUE_LEN;
         MoveData move_array[MOVE_QUEUE_LEN];
 };

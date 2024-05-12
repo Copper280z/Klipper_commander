@@ -6,7 +6,7 @@ class EndStop {
     public:
         bool allocated=false;
         bool torque_error_based=false;
-        int pin;
+        int pin = 0;
 };
 
 #endif

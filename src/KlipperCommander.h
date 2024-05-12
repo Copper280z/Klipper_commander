@@ -33,17 +33,10 @@
 #define SYNC_BYTE 0x7e
 
 
-
-
 struct ObjID {
-    bool allocated;
-    uint32_t oid;
+    bool allocated = false;
+    uint32_t oid = 0;
 };
-
-// struct VarInt {
-// 	uint32_t value;
-// 	uint8_t length;
-// };
 
 class KlipperCommander {
 	public:
@@ -51,13 +44,13 @@ class KlipperCommander {
 		// KlipperCommander(SerialUART Serial);
 		
 
-		#ifdef USE_TINYUSB
-			KlipperCommander(Adafruit_USBD_CDC &Serial);
-		#else
-			KlipperCommander(Stream &Serial);
+		// #ifdef USE_TINYUSB
+		// 	explicit KlipperCommander(Adafruit_USBD_CDC &Serial);
+		// #else
+		explicit KlipperCommander(Stream &Serial);
 			// KlipperCommander(Stream &Serial, uint32_t (*clock)(void));
         
-		#endif
+		// #endif
 
 
 		void attach(float &position, float &velocity_ff, float &torque_ff);
@@ -70,7 +63,7 @@ class KlipperCommander {
 
 		void send_serial();
 
-        uint32_t (*clock)(void);
+        uint32_t (*clock)(void) = NULL;
         MotionQueue move_queue;
         // MotionQueue motor_queues[3];
 
@@ -94,7 +87,6 @@ class KlipperCommander {
 		uint8_t in_buf[256];
 		size_t in_buf_idx = 0;
 		FIFO outgoing_fifo;
-		uint8_t latest_outgoing_sequence;
 
 		void enqueue_response(uint8_t sequence, const uint8_t* msg, uint8_t length);
 		void enqueue_config_response(uint8_t sequence, uint32_t offset, const uint8_t* msg, uint8_t length);
@@ -108,15 +100,15 @@ class KlipperCommander {
 
 		uint16_t parse_crc(uint8_t* msg, uint8_t length);
 
-		uint32_t current_time;
-		uint32_t loop_start_time;
-		uint32_t prev_stats_send;
-		uint32_t prev_stats_send_high;
-		uint32_t stats_loop_count;
-		uint32_t stats_sum;
-		uint32_t stats_sumsq;
+		uint32_t current_time = 0;
+		uint32_t loop_start_time = 0;
+		uint32_t prev_stats_send = 0;
+		uint32_t prev_stats_send_high = 0;
+		uint32_t stats_loop_count = 0;
+		uint32_t stats_sum = 0;
+		uint32_t stats_sumsq = 0;
         uint32_t prev_bytes_remaining = 0;
-
+		uint8_t latest_outgoing_sequence = 0x10 | 0x00;
         uint8_t next_seq = 0x10 | 0x01;
 		// uint8_t output_buffer[SEND_QUEUE_LEN][64];
 		// uint8_t out_buf_write_idx = 0;
@@ -126,7 +118,6 @@ class KlipperCommander {
 		uint32_t host_config_crc = 0;
 		//command handlers below
 		void send_config(uint8_t sequence, uint32_t offset, uint32_t amount) ;
-
 };
 
 
