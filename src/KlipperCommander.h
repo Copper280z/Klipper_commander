@@ -57,6 +57,9 @@ class KlipperCommander {
 		void attach(float &position, float &velocity_ff);
 		void attach(float &position);
 
+		void attach_emergency_stop_cb(void (*cb)(void));
+		void attach_clear_shutdown_cb(void (*cb)(void));
+
 		void recieve_serial();
 		void parse_message(msg_location_t msg);
 		void update_stats(uint32_t current_time);
@@ -64,6 +67,8 @@ class KlipperCommander {
 		void send_serial();
 
         uint32_t (*clock)(void) = NULL;
+        void (*emergency_stop_cb)(void) = NULL;
+        void (*clear_shutdown_cb)(void) = NULL;
         MotionQueue move_queue;
         // MotionQueue motor_queues[3];
 
@@ -103,7 +108,9 @@ class KlipperCommander {
 		uint32_t current_time = 0;
 		uint32_t loop_start_time = 0;
 		uint32_t prev_stats_send = 0;
-		uint32_t prev_stats_send_high = 0;
+		uint32_t clock_high = 0;
+		uint32_t prev_clock_sample = 0;
+		uint32_t recv_clock = 0;
 		uint32_t stats_loop_count = 0;
 		uint32_t stats_sum = 0;
 		uint32_t stats_sumsq = 0;

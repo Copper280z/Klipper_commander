@@ -42,6 +42,7 @@ class MotionQueue {
         void update();
         
         int8_t push(MoveData new_move);
+        void clear();
         uint16_t getCapacity();
         uint16_t getSize();
 
@@ -60,7 +61,7 @@ class MotionQueue {
         TrSync *trsync = NULL;
 
         unsigned long (*clock)(void);
-        uint32_t previous_time=0;
+        uint32_t next_step_time=0;
 
         MoveData current_move = MoveData();
         float position_coeff = 32.0f/(200.0f*16.0f);

@@ -46,92 +46,51 @@ float MotionQueue::getAccel(){
 }
 
 void MotionQueue::update() {
-    uint32_t current_time = clock();
-    uint32_t elapsed_time = current_time - previous_time;
-
-    if (trsync != NULL) {
-        if (trsync->triggered) {
-            current_move = MoveData{NO_MOVE_QUEUED,0,0,0};
-            while (items_in_queue != 0) {
-                pop();
-            }
-            trsync = NULL;
-            if (velocity_var != NULL) {
-                *velocity_var = 0;
-            }
-            
-            // update attached acceleration var
-            if (acceleration_var != NULL) {
-                *acceleration_var = 0;
-            }
+    if (trsync != NULL && trsync->triggered) {
+        current_move = MoveData{NO_MOVE_QUEUED, 0, 0, 0};
+        while (items_in_queue != 0) {
+            pop();
         }
+        trsync = NULL;
+        if (velocity_var != NULL)     *velocity_var = 0;
+        if (acceleration_var != NULL) *acceleration_var = 0;
     }
 
-    if (elapsed_time > current_move.interval) {
+    // Drain every step that is due this iteration using wrap-safe signed comparison.
+    // next_step_time is advanced by the scheduled interval (never by "now") so
+    // loop-timing overshoot does not accumulate into the step timeline.
+    while (current_move.count > 0 &&
+           (int32_t)(clock() - next_step_time) >= 0) {
 
-        // static int print_counter=0;
-        // if (print_counter>20) {
-        //     // Serial.printf("Current time: %u\n", current_time);
-        //     // Serial.printf("Current move interval: %u\n", current_move.interval);
-        //     // Serial.printf("Current queue size: %u out of %u\n", items_in_queue, queue_capacity);
-            // Serial.printf("pos: %.3f - vel: %.3f - accel: %.3f\n",position,velocity,accel);
-        //     print_counter = 0;
-        // }
-        // print_counter+=1;
-        float delta_counts = (float) elapsed_time / (float) current_move.interval; 
-        if (delta_counts > 2) {
-            // Serial.printf("Possibly Meaningful Warning, loop rate slower than step rate: %.2f\n", delta_counts);
-            // Serial.printf("Current elapsed time: %u\n", elapsed_time);
-        }
-        
-        // make sure we don't move beyond the commanded move
-        if (floor(delta_counts) > current_move.count) {
-            delta_counts = float(current_move.count);
-        }
         step_count += current_move.dir;
+        position   += position_coeff * current_move.dir;
+        if (position_var != NULL) *position_var = position;
 
-        position += position_coeff * current_move.dir;
-        // Serial.printf("pos: %.3f - coeff: %.3f - delta_counts: %.3f - dir: %d\n", position, position_coeff, delta_counts, current_move.dir);
-
-        // subtract added counts from current_move
-        current_move.count -= 1;
-    
-        // increment current_move.interval by add*delta_counts
+        next_step_time        += current_move.interval;
         current_move.interval += current_move.add;
+        current_move.count    -= 1;
 
-        // add counts to position variable
-        if (position_var != NULL) {
-            *position_var = position;
-        }
         velocity = velocity_coeff / current_move.interval;
-        // update attached velocity FF var
-        if (velocity_var != NULL) {
-            *velocity_var = velocity;
-        }
+        if (velocity_var != NULL)     *velocity_var = velocity;
         accel = acceleration_coeff * current_move.add / current_move.interval;
-        // update attached acceleration var
-        if (acceleration_var != NULL) {
-            *acceleration_var = accel;
-        }
-        previous_time = current_time;
-        // if (print_counter>20) {
-        //     Serial.printf("Current step count: %d\n", step_count);
-        // }
+        if (acceleration_var != NULL) *acceleration_var = accel;
     }
 
     if (current_move.count == 0) {
-        current_move = pop(); 
-        // if (current_move.interval != NO_MOVE_QUEUED){
-        //     Serial.printf("Current move interval: %u - count: %u - add: %d - dir: %d\n", current_move.interval, current_move.count, current_move.add, current_move.dir);
-        //     Serial.flush();
-        //     Serial.printf("pos: %.3f - vel: %.3f - accel: %.3f\n\n",position,velocity,accel);
-        //     Serial.flush();
-        // }
+        current_move = pop();
     }
-    if (items_in_queue==0){
-        velocity=0;
-        accel=0;
+
+    if (items_in_queue == 0) {
+        velocity = 0;
+        accel    = 0;
     }
+}
+
+void MotionQueue::clear() {
+    while (items_in_queue != 0) {
+        pop();
+    }
+    current_move = MoveData{NO_MOVE_QUEUED, 0, 0, 0};
 }
 
 int8_t MotionQueue::push(MoveData new_move) {

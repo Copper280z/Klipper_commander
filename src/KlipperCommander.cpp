@@ -34,10 +34,24 @@ void KlipperCommander::handle() {
 
     uint32_t current_time = clock();
 
+    // Track 32-bit clock overflows to maintain a 64-bit uptime.
+    if (current_time < prev_clock_sample) {
+        clock_high++;
+    }
+    prev_clock_sample = current_time;
+
     if (is_config) {
         update_stats(current_time);
         move_queue.update();
     }
+}
+
+void KlipperCommander::attach_emergency_stop_cb(void (*cb)(void)) {
+    emergency_stop_cb = cb;
+}
+
+void KlipperCommander::attach_clear_shutdown_cb(void (*cb)(void)) {
+    clear_shutdown_cb = cb;
 }
 
 void KlipperCommander::attach(float &position_p) {
@@ -82,6 +96,7 @@ void KlipperCommander::recieve_serial() {
                 {
                     DEBUG_PRINTLN("  Valid Message!");
                     next_seq = 0x10 | ((next_seq+1) & 0x0f);
+                    recv_clock = clock();
                     ACKNACK(next_seq);
 
                     parse_message(msg);
@@ -206,6 +221,18 @@ int32_t KlipperCommander::command_dispatcher(uint32_t cmd_id, uint8_t sequence, 
     #endif
     uint8_t bytes_consumed = 0;
     switch (cmd_id) {
+        case 2: { // clear_shutdown
+            is_config = 0;
+            move_queue.clear();
+            if (clear_shutdown_cb != NULL) clear_shutdown_cb();
+            break;
+        }
+        case 3: { // emergency_stop
+            is_config = 0;
+            move_queue.clear();
+            if (emergency_stop_cb != NULL) emergency_stop_cb();
+            break;
+        }
         case 1:{
             VarInt offset_var = parse_vlq_int((msg), length);
             VarInt amount_var = parse_vlq_int((msg+offset_var.length), length-offset_var.length);
@@ -215,27 +242,26 @@ int32_t KlipperCommander::command_dispatcher(uint32_t cmd_id, uint8_t sequence, 
             bytes_consumed = offset_var.length+amount_var.length;
             break;
         }
-        case 4:{ //Uptime
+        case 4: { // get_uptime
             DEBUG_PRINTLN("Serving Uptime");
-            current_time = clock();
-
+            uint32_t uptime_clock = clock();
             uint8_t new_msg[64];
             uint8_t resp_id = 79;
             uint8_t offset = encode_vlq_int(new_msg, resp_id);
-            offset+= encode_vlq_int(new_msg+offset, prev_stats_send_high + (current_time < prev_stats_send));
-            offset+= encode_vlq_int(new_msg+offset, current_time);
+            offset += encode_vlq_int(new_msg+offset, clock_high);
+            offset += encode_vlq_int(new_msg+offset, uptime_clock);
             enqueue_response(sequence, new_msg, offset);
             break;
         }
         case 5: { // get_clock
-            current_time = clock();
+            // Use recv_clock captured before the ACK was transmitted so the
+            // host's round-trip estimate is not biased by ACK transmission time.
             uint8_t new_msg[64];
             uint8_t resp_id = 80;
             uint8_t offset = encode_vlq_int(new_msg, resp_id);
-            offset+= encode_vlq_int(new_msg+offset, current_time);
-            enqueue_response(sequence, new_msg, offset);   
-            DEBUG_PRINTF("sum_total_steps: %d\n",sum_total_steps);
-
+            offset += encode_vlq_int(new_msg+offset, recv_clock);
+            enqueue_response(sequence, new_msg, offset);
+            DEBUG_PRINTF("sum_total_steps: %d\n", sum_total_steps);
             break;
         }
         case 6: { // finalize_config crc=%u
@@ -355,10 +381,9 @@ int32_t KlipperCommander::command_dispatcher(uint32_t cmd_id, uint8_t sequence, 
             uint8_t offset=0;
             VarInt oid_var = parse_vlq_int((msg), length);
             offset += oid_var.length;
-            VarInt clock_var = parse_vlq_int((msg+offset), length-oid_var.length);
-            move_queue.previous_time = clock_var.value;
-            bytes_consumed+=oid_var.length + clock_var.length;
-            
+            VarInt clock_var = parse_vlq_int((msg+offset), length-offset);
+            move_queue.next_step_time = clock_var.value;
+            bytes_consumed += oid_var.length + clock_var.length;
         break;
         }
         case 21: { // set_next_step_dir oid=%c dir=%c
@@ -488,7 +513,7 @@ int32_t KlipperCommander::command_dispatcher(uint32_t cmd_id, uint8_t sequence, 
             uint8_t offset=0;
             VarInt oid_var = parse_vlq_int((msg), length);
             offset += oid_var.length;
-            VarInt expire_clock_var = parse_vlq_int((msg), length+offset);
+            VarInt expire_clock_var = parse_vlq_int((msg+offset), length-offset);
             offset += expire_clock_var.length;
             bytes_consumed += offset;
             for (int i=0;i<MAX_TRSYNCS;i++) {
@@ -505,12 +530,12 @@ int32_t KlipperCommander::command_dispatcher(uint32_t cmd_id, uint8_t sequence, 
             uint8_t offset=0;
             VarInt oid_var = parse_vlq_int((msg), length);
             offset += oid_var.length;
-            VarInt report_clock_var = parse_vlq_int((msg), length+offset);
+            VarInt report_clock_var = parse_vlq_int((msg+offset), length-offset);
             offset += report_clock_var.length;
-            VarInt report_ticks_var = parse_vlq_int((msg), length+offset);
+            VarInt report_ticks_var = parse_vlq_int((msg+offset), length-offset);
             offset += report_ticks_var.length;
-            VarInt expire_reason_var = parse_vlq_int((msg), length+offset);
-            offset += report_ticks_var.length;
+            VarInt expire_reason_var = parse_vlq_int((msg+offset), length-offset);
+            offset += expire_reason_var.length;
             bytes_consumed += offset;
             for (int i=0;i<MAX_TRSYNCS;i++) {
                 if (!trsync_objs[i].allocated) {
@@ -544,12 +569,8 @@ int32_t KlipperCommander::command_dispatcher(uint32_t cmd_id, uint8_t sequence, 
         }
         default:{
             DEBUG_PRINTF("&&&&&&&&&&&&&&&&&&&&&&\n");
-            DEBUG_PRINTF("WARNING COMMAND NOT FOUND\n");
+            DEBUG_PRINTF("WARNING COMMAND NOT FOUND: %u\n", cmd_id);
             DEBUG_PRINTF("&&&&&&&&&&&&&&&&&&&&&&\n");
-            while (1) {
-                // Serial.send_now();
-                delay(1000);
-            };
             bytes_consumed = -1;
             break;
         }
@@ -827,10 +848,6 @@ void KlipperCommander::update_stats(uint32_t current_time) {
         return;
     }
     DEBUG_PRINTLN("Sending Stats Update");
-    // not sure how this is ever reached, maybe when the clock rolls over?
-    if ((int32_t)(current_time - prev_stats_send)<0) {
-        prev_stats_send_high++;
-    }
 
     uint8_t msg[64];
     uint8_t resp_id = 78;
@@ -838,7 +855,9 @@ void KlipperCommander::update_stats(uint32_t current_time) {
     offset+= encode_vlq_int(msg+offset, stats_loop_count);
     offset+= encode_vlq_int(msg+offset, stats_sum);
     offset+= encode_vlq_int(msg+offset, stats_sumsq);
-    enqueue_response(latest_outgoing_sequence-1, msg, offset);
+    // Pass the current outgoing sequence so enqueue_response advances it by one,
+    // producing a fresh sequence byte rather than re-using the previous one.
+    enqueue_response(latest_outgoing_sequence, msg, offset);
 
     prev_stats_send = current_time;
     stats_loop_count = 0;
