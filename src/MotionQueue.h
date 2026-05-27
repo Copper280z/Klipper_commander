@@ -76,6 +76,13 @@ class MotionQueue {
     private:
 
         MoveData pop();
+        MoveData peek(uint16_t offset) const;
+        void plan_chunk_accel();
+
+        static constexpr uint16_t LOOKAHEAD_MAX = 16;
+        float accel_slope_per_us = 0.0f;
+        float accel_target = 0.0f;
+
         size_t head = 0;
         size_t tail = 0;
         uint16_t items_in_queue=0;
