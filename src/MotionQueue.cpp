@@ -162,7 +162,7 @@ void MotionQueue::plan_chunk_accel() {
         return;
     }
 
-    // Velocity-equality tolerance: half a velocity-LSB at the current interval.
+    // TODO: don't use a float comparison for this, interval is an integer and exact
     float interval_f = (float)current_move.interval;
     float v_tol = 0.5f * velocity_coeff / (interval_f * interval_f);
 

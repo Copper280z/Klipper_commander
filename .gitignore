@@ -6,3 +6,4 @@
 .cache
 .vscode/
 .DS_Store
+.venv

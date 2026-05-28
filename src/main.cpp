@@ -70,6 +70,7 @@ void loop() {
 #include "Arduino.h"
 
 #include "KlipperCommander.h"
+#include "USBSerialStream.h"
 #include "pins_arduino.h"
 #include "stdint.h"
 
@@ -95,9 +96,9 @@ uint8_t useDFU = 0;
 #undef LED_BUILTIN
 #define LED_BUILTIN USER_LED
 #endif
-HardwareSerial Serial2 = HardwareSerial(USART2);
 
-KlipperCommander k_commander = KlipperCommander(Serial2);
+USBSerialStream usb_stream(Serial, TIM6);
+KlipperCommander k_commander = KlipperCommander(usb_stream);
 
 // simpleFOC constructors
 BLDCDriver3PWM driver = BLDCDriver3PWM(U_PWM, V_PWM, W_PWM, U_EN, V_EN, W_EN);
@@ -125,9 +126,7 @@ void setup()
 	}
   // pinMode(LED_BUILTIN, OUTPUT);
   Serial.begin(250000);
-  Serial2.setTx(PA2);
-  Serial2.setRx(PA3);
-  Serial2.begin(250000);  // Serial1.begin(250000);
+  usb_stream.begin();
 
   digitalWrite(USER_LED, LOW);
 
@@ -157,7 +156,7 @@ void loop()
       float velocity = k_commander.move_queue.velocity;
       float accel = k_commander.move_queue.accel;
 
-      Serial.printf("pos: %.3f - vel: %.3f - accel: %.3f\n",pos,velocity,accel);
+      // Serial.printf("pos: %.3f - vel: %.3f - accel: %.3f\n",pos,velocity,accel);
       print_timer = micros();
     }
 }
@@ -181,19 +180,22 @@ uint8_t configureFOC(){
 	driver.init();
 
 	// Motor PID parameters.
-	motor.PID_velocity.P = 0.02;
-	motor.PID_velocity.I = 0.5;
+  
+	motor.PID_velocity.P = 0.07;
+	motor.PID_velocity.I = 0.1;
 	motor.PID_velocity.D = 0.00;
+  motor.P_angle.P = 10.0;
+  motor.P_angle.I = 1.0;
 	motor.voltage_limit = 4;
-	motor.PID_velocity.output_ramp = 1000;
-	motor.LPF_velocity.Tf = 1/(100*_2PI); // 1/(6.28*250);
-	motor.LPF_angle.Tf = 1/(100*_2PI); // try to avoid
+	// motor.PID_velocity.output_ramp = 1000;
+	motor.LPF_velocity.Tf = 1/(250*_2PI); // 1/(6.28*250);
+	motor.LPF_angle.Tf = 1/(150*_2PI); // try to avoid
 
 	// Motor initialization.
 	motor.voltage_sensor_align = 2;
 	motor.current_limit = 0.5;
 	motor.velocity_limit = 20;
-	motor.controller = MotionControlType::angle;
+	motor.controller = MotionControlType::angle_nocascade;
 	motor.foc_modulation = FOCModulationType::SpaceVectorPWM;
 
 	motor.sensor_offset = 2.43;

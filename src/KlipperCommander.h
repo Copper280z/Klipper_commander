@@ -16,9 +16,10 @@
 #endif
 
 #define DEBUG_P 0
-#define DEBUG_PRINTF if (DEBUG_P) Serial.printf
-#define DEBUG_PRINT if (DEBUG_P) Serial.print
-#define DEBUG_PRINTLN if (DEBUG_P) Serial.println
+extern Print *debug_serial;
+#define DEBUG_PRINTF if (DEBUG_P && debug_serial) debug_serial->printf
+#define DEBUG_PRINT if (DEBUG_P && debug_serial) debug_serial->print
+#define DEBUG_PRINTLN if (DEBUG_P && debug_serial) debug_serial->println
 
 #define MAX_ENDSTOPS 4
 #define MAX_TRSYNCS 10
@@ -93,10 +94,9 @@ class KlipperCommander {
 		size_t in_buf_idx = 0;
 		FIFO outgoing_fifo;
 
-		void enqueue_response(uint8_t sequence, const uint8_t* msg, uint8_t length);
-		void enqueue_config_response(uint8_t sequence, uint32_t offset, const uint8_t* msg, uint8_t length);
-		// void ACK(uint8_t sequence);
-		// void NACK(uint8_t sequence);
+		void write_framed_msg(uint8_t seq, const uint8_t* payload, uint8_t len);
+		void enqueue_response(const uint8_t* msg, uint8_t length);
+		void enqueue_config_response(uint32_t offset, const uint8_t* msg, uint8_t length);
 		void ACKNACK(uint8_t sequence);
 
 		int32_t command_dispatcher(uint32_t cmd_id,uint8_t sequence, uint8_t *msg, int16_t length);
@@ -115,7 +115,6 @@ class KlipperCommander {
 		uint32_t stats_sum = 0;
 		uint32_t stats_sumsq = 0;
         uint32_t prev_bytes_remaining = 0;
-		uint8_t latest_outgoing_sequence = 0x10 | 0x00;
         uint8_t next_seq = 0x10 | 0x01;
 		// uint8_t output_buffer[SEND_QUEUE_LEN][64];
 		// uint8_t out_buf_write_idx = 0;
@@ -124,7 +123,7 @@ class KlipperCommander {
 		CONFIG_DICT
 		uint32_t host_config_crc = 0;
 		//command handlers below
-		void send_config(uint8_t sequence, uint32_t offset, uint32_t amount) ;
+		void send_config(uint32_t offset, uint32_t amount);
 };
 
 

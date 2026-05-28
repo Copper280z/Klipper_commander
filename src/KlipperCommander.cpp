@@ -2,6 +2,8 @@
 #include "parse.h"
 #include <cstdint>
 
+Print *debug_serial = nullptr;
+
 static inline uint32_t default_clock(){
 	return micros();
 }
@@ -97,8 +99,8 @@ void KlipperCommander::recieve_serial() {
                     DEBUG_PRINTLN("  Valid Message!");
                     next_seq = 0x10 | ((next_seq+1) & 0x0f);
                     recv_clock = clock();
-                    ACKNACK(next_seq);
 
+                    ACKNACK(next_seq);
                     parse_message(msg);
                     
                     // byte after this message to the top of the buffer
@@ -238,7 +240,7 @@ int32_t KlipperCommander::command_dispatcher(uint32_t cmd_id, uint8_t sequence, 
             VarInt amount_var = parse_vlq_int((msg+offset_var.length), length-offset_var.length);
             DEBUG_PRINTF("Offset: %u - len: %u\n", (int32_t) offset_var.value, offset_var.length);
             DEBUG_PRINTF("Amount: %u - len: %u\n", amount_var.value, amount_var.length);
-            send_config(sequence, offset_var.value, amount_var.value);
+            send_config(offset_var.value, amount_var.value);
             bytes_consumed = offset_var.length+amount_var.length;
             break;
         }
@@ -250,7 +252,7 @@ int32_t KlipperCommander::command_dispatcher(uint32_t cmd_id, uint8_t sequence, 
             uint8_t offset = encode_vlq_int(new_msg, resp_id);
             offset += encode_vlq_int(new_msg+offset, clock_high);
             offset += encode_vlq_int(new_msg+offset, uptime_clock);
-            enqueue_response(sequence, new_msg, offset);
+            enqueue_response(new_msg, offset);
             break;
         }
         case 5: { // get_clock
@@ -260,7 +262,7 @@ int32_t KlipperCommander::command_dispatcher(uint32_t cmd_id, uint8_t sequence, 
             uint8_t resp_id = 80;
             uint8_t offset = encode_vlq_int(new_msg, resp_id);
             offset += encode_vlq_int(new_msg+offset, recv_clock);
-            enqueue_response(sequence, new_msg, offset);
+            enqueue_response(new_msg, offset);
             DEBUG_PRINTF("sum_total_steps: %d\n", sum_total_steps);
             break;
         }
@@ -286,7 +288,7 @@ int32_t KlipperCommander::command_dispatcher(uint32_t cmd_id, uint8_t sequence, 
             offset += encode_vlq_int(new_msg+offset, (uint16_t)move_queue.getCapacity());
             DEBUG_PRINTF("Stored Host config crc: %u\n", host_config_crc);
             DEBUG_PRINTF("********************************************************\n");
-            enqueue_response(sequence, new_msg, offset);    
+            enqueue_response(new_msg, offset);    
             break;
         }
         case 8: { // allocate_oids count=%c
@@ -373,7 +375,7 @@ int32_t KlipperCommander::command_dispatcher(uint32_t cmd_id, uint8_t sequence, 
             offset += encode_vlq_int(new_msg+offset, 0);
             // TODO - Get the accumulated motor position
             offset += encode_vlq_int(new_msg+offset, 0);
-            enqueue_response(sequence, new_msg, offset);    
+            enqueue_response(new_msg, offset);    
             
         break;
         }
@@ -464,7 +466,7 @@ int32_t KlipperCommander::command_dispatcher(uint32_t cmd_id, uint8_t sequence, 
             offset += encode_vlq_int(new_msg+offset, move_queue.homing);        // homing
             offset += encode_vlq_int(new_msg+offset, next_clock);               // next_clock - Precise time pin satisfies trigger condition
             offset += encode_vlq_int(new_msg+offset, move_queue.endstop_state); // pin_state
-            enqueue_response(sequence, new_msg, offset);
+            enqueue_response(new_msg, offset);
             
             
         break;
@@ -700,16 +702,11 @@ uint16_t KlipperCommander::parse_crc(uint8_t* msg, uint8_t length) {
     return crc;
 }
 
-void KlipperCommander::send_config(uint8_t sequence, uint32_t offset, uint32_t amount) {
-
-    if ((offset+amount) < CONFIG_DICT_LENGTH) {
-        enqueue_config_response(sequence, offset, &config[offset], amount);
-    } else if(offset==CONFIG_DICT_LENGTH){
-        // uint8_t msg[] = {0,CONFIG_DICT_LENGTH,0};
-        enqueue_config_response(sequence, offset, &config[offset], CONFIG_DICT_LENGTH-offset);
-
+void KlipperCommander::send_config(uint32_t offset, uint32_t amount) {
+    if ((offset + amount) < CONFIG_DICT_LENGTH) {
+        enqueue_config_response(offset, &config[offset], amount);
     } else {
-        enqueue_config_response(sequence, offset, &config[offset], CONFIG_DICT_LENGTH-offset);
+        enqueue_config_response(offset, &config[offset], CONFIG_DICT_LENGTH - offset);
     }
 }
 
@@ -735,26 +732,22 @@ void KlipperCommander::send_config(uint8_t sequence, uint32_t offset, uint32_t a
 //     outgoing_fifo.finalizeMessage();
 // }
 
-void KlipperCommander::enqueue_response(uint8_t sequence, const uint8_t* msg, uint8_t length) {
+void KlipperCommander::write_framed_msg(uint8_t seq, const uint8_t* payload, uint8_t len) {
     uint8_t msg_arr[64];
-
-    uint8_t send_cmd_len = 5+length;
-
-    uint8_t new_sequence = ((sequence + 1 ) & 0b00001111) | 0x10;
-    latest_outgoing_sequence = new_sequence;
-
-    msg_arr[0] = send_cmd_len;
-    msg_arr[1] = new_sequence;
-    for (int i=0;i<length;i++) {
-        msg_arr[i+2] = msg[i];
-    }
-    uint16_t crc = crc16(msg_arr,send_cmd_len-3);
-    msg_arr[2+length] = (uint8_t) (crc >> 8);
-    msg_arr[3+length] = (uint8_t) (crc & 0xFF);
-    msg_arr[4+length] = SYNC_BYTE;
-
-    serial.write(msg_arr,send_cmd_len);
+    uint8_t total_len = 5 + len;
+    msg_arr[0] = total_len;
+    msg_arr[1] = seq;
+    for (int i = 0; i < len; i++) msg_arr[2+i] = payload[i];
+    uint16_t crc = crc16(msg_arr, total_len - 3);
+    msg_arr[2+len] = (uint8_t)(crc >> 8);
+    msg_arr[3+len] = (uint8_t)(crc & 0xFF);
+    msg_arr[4+len] = SYNC_BYTE;
+    serial.write(msg_arr, total_len);
     serial.flush();
+}
+
+void KlipperCommander::enqueue_response(const uint8_t* msg, uint8_t length) {
+    write_framed_msg(next_seq, msg, length);
 }
 
 // void KlipperCommander::enqueue_config_response(uint8_t sequence, uint32_t offset, const uint8_t* msg, uint8_t count) {
@@ -786,33 +779,14 @@ void KlipperCommander::enqueue_response(uint8_t sequence, const uint8_t* msg, ui
 //     outgoing_fifo.finalizeMessage();
 // }
 
-void KlipperCommander::enqueue_config_response(uint8_t sequence, uint32_t offset, const uint8_t* msg, uint8_t count) {
-    uint8_t msg_arr[64];
-    uint8_t new_sequence = ((sequence +1 ) & 0b00001111) | 0x10;
-    uint8_t offset_bytes = encode_vlq_int(&msg_arr[3], offset);
-    uint8_t count_bytes = encode_vlq_int(&msg_arr[3+offset_bytes], count);
-    uint8_t vlq_bytes = offset_bytes+count_bytes;
-    uint8_t send_cmd_len = 6+count+vlq_bytes;
-
-    msg_arr[0] = send_cmd_len;
-    msg_arr[1] = new_sequence;
-    msg_arr[2] = 0; // command id - "identify_response"
-    
-    for (int i=0;i<count;i++) {
-        msg_arr[i+3+vlq_bytes] = *(msg+i);
-    }
-
-    uint16_t crc = crc16(msg_arr,send_cmd_len-3);
-    msg_arr[3+vlq_bytes+count] = (uint8_t) (crc >> 8);
-    msg_arr[4+vlq_bytes+count] = (uint8_t) (crc & 0xFF);
-    msg_arr[5+vlq_bytes+count] = SYNC_BYTE;
-
-    DEBUG_PRINTF("command length: %u - 0x%x\n", send_cmd_len,send_cmd_len);
-    DEBUG_PRINTF("Parsed crc: 0x%x\n", parse_crc(msg_arr,send_cmd_len));
-    DEBUG_PRINTF("Calc'd crc: 0x%x\n", crc);
-
-    serial.write(msg_arr,send_cmd_len);
-    serial.flush();
+void KlipperCommander::enqueue_config_response(uint32_t dict_offset, const uint8_t* msg, uint8_t count) {
+    uint8_t payload[64];
+    payload[0] = 0; // command id - "identify_response"
+    uint8_t pos = 1;
+    pos += encode_vlq_int(payload + pos, dict_offset);
+    pos += encode_vlq_int(payload + pos, count);
+    for (int i = 0; i < count; i++) payload[pos + i] = msg[i];
+    write_framed_msg(next_seq, payload, pos + count);
 }
 
 void print_byte_array(uint8_t* arr, uint8_t len){
@@ -855,9 +829,7 @@ void KlipperCommander::update_stats(uint32_t current_time) {
     offset+= encode_vlq_int(msg+offset, stats_loop_count);
     offset+= encode_vlq_int(msg+offset, stats_sum);
     offset+= encode_vlq_int(msg+offset, stats_sumsq);
-    // Pass the current outgoing sequence so enqueue_response advances it by one,
-    // producing a fresh sequence byte rather than re-using the previous one.
-    enqueue_response(latest_outgoing_sequence, msg, offset);
+    enqueue_response(msg, offset);
 
     prev_stats_send = current_time;
     stats_loop_count = 0;
